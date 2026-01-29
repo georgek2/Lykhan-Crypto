@@ -7,7 +7,7 @@ from binance.client import Client
 from binance import ThreadedWebsocketManager
 
 
-from .buy_sell import ArbitrageAgent
+# from .buy_sell import ArbitrageAgent
 '''
 Docstring for agent.extact_transform
 Takes care of extracting and transforming data for the agent module.
@@ -147,11 +147,11 @@ class ArbitrageExtractor:
                         if profit > 0:
                             print(f"Lag arb! Buy at {old_ask}, sell now at {cur_bid}, profit: {profit:.8f}")
                             # Buy and Sell Actions...
-                            executer = ArbitrageAgent()
+                            # executer = ArbitrageAgent()
                             
-                            execute_buy = executer.buy('BROCCOLI714USDT', quantity=1, price=old_ask_f)
-                            execute_sell = executer.sell('BROCCOLI714USDT', quantity=1, price=bid_f)
-                            print(f"Executed Buy: {execute_buy}, Executed Sell: {execute_sell}")
+                            # execute_buy = executer.buy('BROCCOLI714USDT', quantity=1, price=old_ask_f)
+                            # execute_sell = executer.sell('BROCCOLI714USDT', quantity=1, price=bid_f)
+                            # print(f"Executed Buy: {execute_buy}, Executed Sell: {execute_sell}")
                         else:
                             print(f"No lag arb: spread={profit:.8f}")
                     except ValueError:
