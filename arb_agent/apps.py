@@ -2,4 +2,4 @@ from django.apps import AppConfig
 
 
 class AgentConfig(AppConfig):
-    name = 'agent'
+    name = 'arb_agent'
