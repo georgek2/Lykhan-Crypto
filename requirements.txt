@@ -1,0 +1,107 @@
+# =============================================================================
+# Lykhan — Master Requirements File
+# =============================================================================
+# Install everything with:
+#   pip install -r requirements.txt
+#
+# This file covers all three layers of the project:
+#   1. Django core (shared by both apps)
+#   2. arb_agent — crypto arbitrage agent
+#   3. forex — MT5 bridge and trade execution services
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Django Core
+# Used by: entire project
+# Django is the web framework that ties both apps together, handles the ORM,
+# admin panel, URL routing, and will serve the dashboard and REST API.
+# -----------------------------------------------------------------------------
+django>=5.0,<6.0
+python-dotenv>=1.0.1        # Loads .env files into os.environ
+
+
+# -----------------------------------------------------------------------------
+# Database (Production)
+# Used by: Django ORM
+# SQLite (Django's default) is fine for development. For production on AWS
+# or any cloud server, switch to PostgreSQL — it handles concurrent writes
+# from Celery workers and the agent processes much more reliably.
+# Uncomment psycopg2-binary when you're ready to move to PostgreSQL.
+# -----------------------------------------------------------------------------
+# psycopg2-binary>=2.9.9
+
+
+# -----------------------------------------------------------------------------
+# Async Task Queue
+# Used by: both apps (trade execution, arbitrage scanning)
+# Celery is what allows Django to dispatch long-running tasks (like opening
+# a trade or scanning for arbitrage) without blocking the web server.
+# Redis acts as the message broker — the "post office" between Django and
+# the Celery workers. Both are needed together.
+# Uncomment these when you're ready to integrate Celery.
+# -----------------------------------------------------------------------------
+# celery>=5.3.6
+# redis>=5.0.3
+# django-celery-beat>=2.6.0   # Enables scheduled periodic tasks via Django admin
+
+
+# -----------------------------------------------------------------------------
+# REST API
+# Used by: both apps (exposing endpoints for the dashboard and signals)
+# Django REST Framework turns Django views into a proper REST API, which
+# you'll need when TradingView webhooks or external signals trigger trades.
+# Uncomment when you're ready to build API endpoints.
+# -----------------------------------------------------------------------------
+# djangorestframework>=3.15.1
+
+
+# -----------------------------------------------------------------------------
+# Crypto Arbitrage Agent (arb_agent app)
+# Used by: arb_agent/extract_transform.py, arb_agent/buy_sell.py
+# python-binance wraps the Binance REST API and WebSocket streams, giving
+# you real-time price feeds and the ability to place orders programmatically.
+# -----------------------------------------------------------------------------
+python-binance>=1.0.19
+
+
+# -----------------------------------------------------------------------------
+# Forex Agent Services (forex app)
+# Used by: forex/services/
+#
+# pydantic and pydantic-settings are the data validation layer for the forex
+# services. They define and validate all trade command and result objects,
+# ensuring that malformed data never reaches the trade executor. Think of
+# Pydantic as a strict contract enforcer — if a field is the wrong type or
+# missing, it fails loudly rather than silently passing bad data to MT5.
+#
+# rich gives the CLI its coloured panels, tables, and formatted output.
+# click is the framework that turns main.py into a proper CLI with commands
+# like `python main.py buy` and `python main.py status`.
+# -----------------------------------------------------------------------------
+pydantic>=2.7.1
+pydantic-settings>=2.3.4
+rich>=13.7.1
+click>=8.1.7
+
+
+# -----------------------------------------------------------------------------
+# Browser Automation (future — Playwright-based exchange navigation)
+# Used by: both agents (fallback when exchange APIs are unavailable)
+# Playwright allows the agent to control a real browser, navigate exchange
+# UIs, and click buttons just like a human would. This will be essential
+# for exchanges that don't offer a public API.
+# Uncomment when you're ready to implement browser automation.
+# -----------------------------------------------------------------------------
+# playwright>=1.44.0
+
+
+# -----------------------------------------------------------------------------
+# HTTP Client (future — webhooks, LLM APIs, external signals)
+# Used by: signal integration layer, TradingView webhook receiver
+# httpx is a modern async-capable HTTP client. You'll need it when the
+# forex agent starts making outbound calls to LLM APIs (Claude, Gemini)
+# or receiving inbound webhook signals from TradingView.
+# Uncomment when you're ready to integrate external signals.
+# -----------------------------------------------------------------------------
+# httpx>=0.27.0
