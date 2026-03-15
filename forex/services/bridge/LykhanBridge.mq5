@@ -1,38 +1,35 @@
 //+------------------------------------------------------------------+
 //|  LykhanBridge.mq5                                                |
-//|  Lykhan Forex Agent — MT5 File Bridge Expert Advisor v1.10       |
+//|  Lykhan Forex Agent — MT5 File Bridge Expert Advisor v1.20       |
+//|                                                                  |
+//|  v1.20 fix: ticket numbers changed from int to ulong to handle   |
+//|  Deriv's large 64-bit ticket numbers without integer overflow.   |
 //|                                                                  |
 //|  FILE SYSTEM NOTE                                                |
 //|  ─────────────────                                               |
-//|  MT5 sandboxes all file I/O to the terminal's MQL5\Files\       |
-//|  directory. Absolute paths like C:\mt5bridge\ are silently      |
-//|  blocked. This EA uses RELATIVE paths, which MT5 automatically  |
-//|  resolves to: <Terminal Data Folder>\MQL5\Files\mt5bridge\       |
-//|                                                                  |
-//|  On the Linux/Bottles side, Python points its bridge to the     |
-//|  same folder via the equivalent Linux path.                      |
+//|  MT5 sandboxes all file I/O to MQL5\Files\. This EA uses        |
+//|  RELATIVE paths which MT5 resolves to:                           |
+//|    <Terminal Data Folder>\MQL5\Files\mt5bridge\                  |
 //|                                                                  |
 //|  INSTALLATION                                                    |
-//|  ────────────                                                    |
+//|  ────────────                                                     |
 //|  1. Copy to MT5 Data Folder → MQL5\Experts\                     |
 //|  2. Compile in MetaEditor (F4 → open file → F7)                 |
-//|  3. Attach to EURUSD chart                                       |
+//|  3. Attach to Volatility 10 Index chart                          |
 //|  4. Enable "Allow automated trading" in Common tab               |
 //|  5. Enable Algo Trading button in main MT5 toolbar               |
 //+------------------------------------------------------------------+
 #property copyright "Lykhan Forex Agent"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 
 //── Input Parameters ──────────────────────────────────────────────────────────
-// SubFolder is RELATIVE to MT5's MQL5\Files\ directory.
-// Do NOT use absolute paths like C:\... — MT5's sandbox will block them.
 input string SubFolder  = "mt5bridge";  // Bridge folder name inside MQL5\Files\
 input int    PollMs     = 500;          // How often to check for commands (ms)
-input bool   VerboseLog = true;         // Print detailed logs to MT5 journal
+input bool   VerboseLog = true;         // Print detailed logs to MT5 Experts tab
 
 //── Global state ──────────────────────────────────────────────────────────────
 CTrade        Trade;
@@ -63,7 +60,7 @@ int OnInit()
    WriteHeartbeat(true);
    EventSetMillisecondTimer(PollMs);
 
-   Print("[LykhanBridge] v1.10 initialised. Folder: MQL5\\Files\\", SubFolder,
+   Print("[LykhanBridge] v1.20 initialised. Folder: MQL5\\Files\\", SubFolder,
          " — polling every ", PollMs, "ms");
    return INIT_SUCCEEDED;
 }
@@ -143,6 +140,7 @@ void ProcessSingleCommand(const string filePath)
 
    if(VerboseLog) Print("[LykhanBridge] Command: ", json);
 
+   // Parse all fields from the JSON payload
    string commandId = JsonGetString(json, "command_id");
    string action    = JsonGetString(json, "action");
    string symbol    = JsonGetString(json, "symbol");
@@ -152,7 +150,12 @@ void ProcessSingleCommand(const string filePath)
    int    slippage  = (int)JsonGetDouble(json, "slippage");
    int    magic     = (int)JsonGetDouble(json, "magic");
    string comment   = JsonGetString(json, "comment");
-   int    ticket    = (int)JsonGetDouble(json, "ticket");
+
+   // ── FIX v1.20 ────────────────────────────────────────────────────────────
+   // Deriv ticket numbers exceed the 32-bit int range (~2.1 billion max).
+   // Casting them to int causes overflow and produces -2147483648.
+   // ulong (unsigned 64-bit) handles numbers up to 18.4 quintillion safely.
+   ulong ticket = (ulong)JsonGetDouble(json, "ticket");
 
    Trade.SetExpertMagicNumber(magic);
    Trade.SetDeviationInPoints(slippage);
@@ -178,11 +181,12 @@ void ExecuteBuy(const string cid, const string sym, double lots,
    double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
+   // For a 5-digit broker, 1 pip = 10 points
    double sl = (slPips > 0) ? NormalizeDouble(price - slPips * point * 10, digits) : 0;
    double tp = (tpPips > 0) ? NormalizeDouble(price + tpPips * point * 10, digits) : 0;
 
    bool ok = Trade.Buy(lots, sym, price, sl, tp, cmt);
-   if(ok) WriteSuccess(cid, (int)Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
+   if(ok) WriteSuccess(cid, Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
    else   WriteError(cid, (int)Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
 }
 
@@ -196,24 +200,27 @@ void ExecuteSell(const string cid, const string sym, double lots,
    double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
 
+   // For SELL: SL is above entry, TP is below entry
    double sl = (slPips > 0) ? NormalizeDouble(price + slPips * point * 10, digits) : 0;
    double tp = (tpPips > 0) ? NormalizeDouble(price - tpPips * point * 10, digits) : 0;
 
    bool ok = Trade.Sell(lots, sym, price, sl, tp, cmt);
-   if(ok) WriteSuccess(cid, (int)Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
+   if(ok) WriteSuccess(cid, Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
    else   WriteError(cid, (int)Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
 }
 
 //+------------------------------------------------------------------+
 //| Close a specific open position by ticket number                  |
+//| ticket is ulong to handle Deriv's large 64-bit ticket numbers    |
 //+------------------------------------------------------------------+
-void ExecuteClose(const string cid, int ticket, const string sym)
+void ExecuteClose(const string cid, ulong ticket, const string sym)
 {
    if(PositionSelectByTicket(ticket))
    {
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double profit    = PositionGetDouble(POSITION_PROFIT);
       bool   ok        = Trade.PositionClose(ticket);
+
       if(ok)
       {
          double closePrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
@@ -223,7 +230,7 @@ void ExecuteClose(const string cid, int ticket, const string sym)
       }
       else WriteError(cid, (int)Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
    }
-   else WriteError(cid, -2, "Ticket not found: " + IntegerToString(ticket));
+   else WriteError(cid, -2, "Ticket not found: " + IntegerToString((long)ticket));
 }
 
 //+------------------------------------------------------------------+
@@ -269,50 +276,54 @@ void ExecuteGetStatus(const string cid)
       if(!PositionSelectByTicket(ticket)) continue;
       if(i > 0) posArray += ",";
       string pt = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      posArray += "{\"ticket\":"        + IntegerToString((int)ticket)
-               +  ",\"symbol\":\""     + PositionGetString(POSITION_SYMBOL)                        + "\""
-               +  ",\"action\":\""     + pt                                                         + "\""
-               +  ",\"lot_size\":"     + DoubleToString(PositionGetDouble(POSITION_VOLUME),    2)
-               +  ",\"open_price\":"   + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN),5)
-               +  ",\"current_price\":"+ DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT),5)
-               +  ",\"sl\":"           + DoubleToString(PositionGetDouble(POSITION_SL),        5)
-               +  ",\"tp\":"           + DoubleToString(PositionGetDouble(POSITION_TP),        5)
-               +  ",\"profit\":"       + DoubleToString(PositionGetDouble(POSITION_PROFIT),    2)
-               +  ",\"swap\":"         + DoubleToString(PositionGetDouble(POSITION_SWAP),      2)
-               +  ",\"magic\":"        + IntegerToString((int)PositionGetInteger(POSITION_MAGIC))
-               +  ",\"comment\":\""    + PositionGetString(POSITION_COMMENT)                        + "\""
-               +  ",\"open_time\":\""  + TimeToString((datetime)PositionGetInteger(POSITION_TIME),
-                                           TIME_DATE|TIME_SECONDS)                                   + "\""
-               +  "}";
+      posArray += "{"
+               + "\"ticket\":"         + IntegerToString((long)ticket)                            + ","
+               + "\"symbol\":\""       + PositionGetString(POSITION_SYMBOL)                       + "\","
+               + "\"action\":\""       + pt                                                        + "\","
+               + "\"lot_size\":"       + DoubleToString(PositionGetDouble(POSITION_VOLUME),    2) + ","
+               + "\"open_price\":"     + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN),5) + ","
+               + "\"current_price\":"  + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT),5) + ","
+               + "\"sl\":"             + DoubleToString(PositionGetDouble(POSITION_SL),        5) + ","
+               + "\"tp\":"             + DoubleToString(PositionGetDouble(POSITION_TP),        5) + ","
+               + "\"profit\":"         + DoubleToString(PositionGetDouble(POSITION_PROFIT),    2) + ","
+               + "\"swap\":"           + DoubleToString(PositionGetDouble(POSITION_SWAP),      2) + ","
+               + "\"magic\":"          + IntegerToString((int)PositionGetInteger(POSITION_MAGIC)) + ","
+               + "\"comment\":\""      + PositionGetString(POSITION_COMMENT)                      + "\","
+               + "\"open_time\":\""    + TimeToString((datetime)PositionGetInteger(POSITION_TIME),
+                                          TIME_DATE|TIME_SECONDS)                                  + "\""
+               + "}";
    }
    posArray += "]";
 
-   string snapshot = "{\"balance\":"      + DoubleToString(balance,    2)
-                   + ",\"equity\":"       + DoubleToString(equity,     2)
-                   + ",\"margin\":"       + DoubleToString(margin,     2)
-                   + ",\"free_margin\":"  + DoubleToString(freeMargin, 2)
-                   + ",\"margin_level\":" + DoubleToString(marginLvl,  2)
-                   + ",\"profit\":"       + DoubleToString(profit,     2)
-                   + ",\"positions\":"    + posArray
-                   + ",\"snapshot_time\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\"}";
+   string snapshot = "{"
+                   + "\"balance\":"       + DoubleToString(balance,    2) + ","
+                   + "\"equity\":"        + DoubleToString(equity,     2) + ","
+                   + "\"margin\":"        + DoubleToString(margin,     2) + ","
+                   + "\"free_margin\":"   + DoubleToString(freeMargin, 2) + ","
+                   + "\"margin_level\":"  + DoubleToString(marginLvl,  2) + ","
+                   + "\"profit\":"        + DoubleToString(profit,     2) + ","
+                   + "\"positions\":"     + posArray                       + ","
+                   + "\"snapshot_time\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\""
+                   + "}";
 
    string statusFile = StatusDir + "status_" + cid + ".json";
    int fh = FileOpen(statusFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(fh != INVALID_HANDLE) { FileWriteString(fh, snapshot); FileClose(fh); }
+   if(VerboseLog) Print("[LykhanBridge] Status snapshot written.");
 }
 
 //+------------------------------------------------------------------+
-//| Write EXECUTED result file                                       |
+//| Write EXECUTED result — ticket is ulong for Deriv compatibility  |
 //+------------------------------------------------------------------+
-void WriteSuccess(const string cid, int ticket, double openPrice,
+void WriteSuccess(const string cid, ulong ticket, double openPrice,
                   double closePrice, double profit)
 {
    string json = "{\"command_id\":\"" + cid + "\","
                + "\"status\":\"EXECUTED\","
-               + "\"ticket\":"      + IntegerToString(ticket)      + ","
-               + "\"open_price\":"  + DoubleToString(openPrice, 5) + ","
-               + "\"close_price\":" + DoubleToString(closePrice,5) + ","
-               + "\"profit\":"      + DoubleToString(profit,    2) + ","
+               + "\"ticket\":"      + IntegerToString((long)ticket) + ","
+               + "\"open_price\":"  + DoubleToString(openPrice, 5)  + ","
+               + "\"close_price\":" + DoubleToString(closePrice,5)  + ","
+               + "\"profit\":"      + DoubleToString(profit,    2)  + ","
                + "\"error_code\":null,\"error_message\":null,"
                + "\"processed_at\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\"}";
    WriteResultFile(cid, json);
@@ -367,6 +378,7 @@ string JsonGetString(const string json, const string key)
 
 //+------------------------------------------------------------------+
 //| Extract a numeric value from flat JSON by key                    |
+//| Handles unquoted numbers, quoted numbers, and null              |
 //+------------------------------------------------------------------+
 double JsonGetDouble(const string json, const string key)
 {
