@@ -1,37 +1,26 @@
 //+------------------------------------------------------------------+
 //|  LykhanBridge.mq5                                                |
-//|  Lykhan Forex Agent — MT5 File Bridge Expert Advisor v1.20       |
+//|  Lykhan Forex Agent — MT5 File Bridge Expert Advisor v1.30       |
+//|                                                                  |
+//|  v1.30 additions:                                                |
+//|    - GET_CANDLES command: returns OHLCV bars for any symbol      |
+//|      and timeframe as a JSON array. Used by the Python           |
+//|      strategic LLM analysis loop and HFT scanner.               |
 //|                                                                  |
 //|  v1.20 fix: ticket numbers changed from int to ulong to handle   |
 //|  Deriv's large 64-bit ticket numbers without integer overflow.   |
-//|                                                                  |
-//|  FILE SYSTEM NOTE                                                |
-//|  ─────────────────                                               |
-//|  MT5 sandboxes all file I/O to MQL5\Files\. This EA uses        |
-//|  RELATIVE paths which MT5 resolves to:                           |
-//|    <Terminal Data Folder>\MQL5\Files\mt5bridge\                  |
-//|                                                                  |
-//|  INSTALLATION                                                    |
-//|  ────────────                                                     |
-//|  1. Copy to MT5 Data Folder → MQL5\Experts\                     |
-//|  2. Compile in MetaEditor (F4 → open file → F7)                 |
-//|  3. Attach to Volatility 10 Index chart                          |
-//|  4. Enable "Allow automated trading" in Common tab               |
-//|  5. Enable Algo Trading button in main MT5 toolbar               |
 //+------------------------------------------------------------------+
 #property copyright "Lykhan Forex Agent"
-#property version   "1.20"
+#property version   "1.30"
 #property strict
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 
-//── Input Parameters ──────────────────────────────────────────────────────────
-input string SubFolder  = "mt5bridge";  // Bridge folder name inside MQL5\Files\
-input int    PollMs     = 500;          // How often to check for commands (ms)
-input bool   VerboseLog = true;         // Print detailed logs to MT5 Experts tab
+input string SubFolder  = "mt5bridge";
+input int    PollMs     = 500;
+input bool   VerboseLog = true;
 
-//── Global state ──────────────────────────────────────────────────────────────
 CTrade        Trade;
 CPositionInfo PosInfo;
 
@@ -43,7 +32,7 @@ string HbFile    = "";
 datetime LastHeartbeat = 0;
 
 //+------------------------------------------------------------------+
-//| OnInit — runs once when EA is attached to chart                  |
+//| OnInit                                                           |
 //+------------------------------------------------------------------+
 int OnInit()
 {
@@ -60,13 +49,13 @@ int OnInit()
    WriteHeartbeat(true);
    EventSetMillisecondTimer(PollMs);
 
-   Print("[LykhanBridge] v1.20 initialised. Folder: MQL5\\Files\\", SubFolder,
+   Print("[LykhanBridge] v1.30 initialised. Folder: MQL5\\Files\\", SubFolder,
          " — polling every ", PollMs, "ms");
    return INIT_SUCCEEDED;
 }
 
 //+------------------------------------------------------------------+
-//| OnDeinit — runs when EA is removed from chart                    |
+//| OnDeinit                                                         |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
@@ -75,7 +64,7 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| OnTimer — fires every PollMs milliseconds                        |
+//| OnTimer                                                          |
 //+------------------------------------------------------------------+
 void OnTimer()
 {
@@ -84,7 +73,7 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| Write heartbeat.txt every 5 seconds so Python knows EA is alive  |
+//| Heartbeat                                                        |
 //+------------------------------------------------------------------+
 void WriteHeartbeat(bool force)
 {
@@ -97,14 +86,12 @@ void WriteHeartbeat(bool force)
    {
       FileWriteString(fh, TimeToString(now, TIME_DATE | TIME_SECONDS));
       FileClose(fh);
-      if(VerboseLog && force) Print("[LykhanBridge] Heartbeat written: ", HbFile);
    }
-   else
-      Print("[LykhanBridge] WARNING: Failed to write heartbeat. Error=", GetLastError());
+   else Print("[LykhanBridge] WARNING: Failed to write heartbeat. Error=", GetLastError());
 }
 
 //+------------------------------------------------------------------+
-//| Scan commands directory for pending JSON files                   |
+//| Scan commands directory                                          |
 //+------------------------------------------------------------------+
 void ProcessCommandFiles()
 {
@@ -112,35 +99,26 @@ void ProcessCommandFiles()
    long   handle = FileFindFirst(CmdDir + "cmd_*.json", fname);
    if(handle == INVALID_HANDLE) return;
 
-   do
-   {
-      ProcessSingleCommand(CmdDir + fname);
-   }
+   do { ProcessSingleCommand(CmdDir + fname); }
    while(FileFindNext(handle, fname));
 
    FileFindClose(handle);
 }
 
 //+------------------------------------------------------------------+
-//| Read one command file, parse JSON, dispatch to handler           |
+//| Parse and dispatch one command                                   |
 //+------------------------------------------------------------------+
 void ProcessSingleCommand(const string filePath)
 {
    int fh = FileOpen(filePath, FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ);
-   if(fh == INVALID_HANDLE)
-   {
-      if(VerboseLog) Print("[LykhanBridge] Cannot open: ", filePath, " err=", GetLastError());
-      return;
-   }
+   if(fh == INVALID_HANDLE) return;
 
    string json = "";
-   while(!FileIsEnding(fh))
-      json += FileReadString(fh);
+   while(!FileIsEnding(fh)) json += FileReadString(fh);
    FileClose(fh);
 
    if(VerboseLog) Print("[LykhanBridge] Command: ", json);
 
-   // Parse all fields from the JSON payload
    string commandId = JsonGetString(json, "command_id");
    string action    = JsonGetString(json, "action");
    string symbol    = JsonGetString(json, "symbol");
@@ -150,29 +128,97 @@ void ProcessSingleCommand(const string filePath)
    int    slippage  = (int)JsonGetDouble(json, "slippage");
    int    magic     = (int)JsonGetDouble(json, "magic");
    string comment   = JsonGetString(json, "comment");
+   ulong  ticket    = (ulong)JsonGetDouble(json, "ticket");
 
-   // ── FIX v1.20 ────────────────────────────────────────────────────────────
-   // Deriv ticket numbers exceed the 32-bit int range (~2.1 billion max).
-   // Casting them to int causes overflow and produces -2147483648.
-   // ulong (unsigned 64-bit) handles numbers up to 18.4 quintillion safely.
-   ulong ticket = (ulong)JsonGetDouble(json, "ticket");
+   // GET_CANDLES fields
+   string timeframe = JsonGetString(json, "timeframe");
+   int    count     = (int)JsonGetDouble(json, "count");
+   if(count <= 0) count = 100;
 
    Trade.SetExpertMagicNumber(magic);
    Trade.SetDeviationInPoints(slippage);
 
-   // Delete command file immediately to prevent double-processing
    FileDelete(filePath);
 
-   if     (action == "BUY")        ExecuteBuy(commandId, symbol, lotSize, slPips, tpPips, comment);
-   else if(action == "SELL")       ExecuteSell(commandId, symbol, lotSize, slPips, tpPips, comment);
-   else if(action == "CLOSE")      ExecuteClose(commandId, ticket, symbol);
-   else if(action == "CLOSE_ALL")  ExecuteCloseAll(commandId, magic);
-   else if(action == "GET_STATUS") ExecuteGetStatus(commandId);
-   else                            WriteError(commandId, -1, "Unknown action: " + action);
+   if     (action == "BUY")         ExecuteBuy(commandId, symbol, lotSize, slPips, tpPips, comment);
+   else if(action == "SELL")        ExecuteSell(commandId, symbol, lotSize, slPips, tpPips, comment);
+   else if(action == "CLOSE")       ExecuteClose(commandId, ticket, symbol);
+   else if(action == "CLOSE_ALL")   ExecuteCloseAll(commandId, magic);
+   else if(action == "GET_STATUS")  ExecuteGetStatus(commandId);
+   else if(action == "GET_CANDLES") ExecuteGetCandles(commandId, symbol, timeframe, count);
+   else                             WriteError(commandId, -1, "Unknown action: " + action);
 }
 
 //+------------------------------------------------------------------+
-//| Open a market BUY position                                       |
+//| GET_CANDLES — returns OHLCV bars as JSON to results/             |
+//+------------------------------------------------------------------+
+void ExecuteGetCandles(const string cid, const string sym,
+                       const string tfStr, int count)
+{
+   ENUM_TIMEFRAMES period = StringToTimeframe(tfStr);
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   int copied = CopyRates(sym, period, 0, count, rates);
+
+   if(copied <= 0)
+   {
+      WriteError(cid, -3, "CopyRates failed: " + sym + " " + tfStr +
+                           " err=" + IntegerToString(GetLastError()));
+      return;
+   }
+
+   // Build JSON: most recent bar last (Python expects oldest→newest)
+   string bars = "[";
+   for(int i = copied - 1; i >= 0; i--)
+   {
+      if(i < copied - 1) bars += ",";
+      bars += "{"
+           + "\"time\":\""  + TimeToString(rates[i].time, TIME_DATE|TIME_SECONDS) + "\","
+           + "\"open\":"    + DoubleToString(rates[i].open,  5) + ","
+           + "\"high\":"    + DoubleToString(rates[i].high,  5) + ","
+           + "\"low\":"     + DoubleToString(rates[i].low,   5) + ","
+           + "\"close\":"   + DoubleToString(rates[i].close, 5) + ","
+           + "\"volume\":"  + IntegerToString(rates[i].tick_volume)
+           + "}";
+   }
+   bars += "]";
+
+   string payload = "{"
+                  + "\"symbol\":\""    + sym    + "\","
+                  + "\"timeframe\":\"" + tfStr  + "\","
+                  + "\"bars\":"        + bars
+                  + "}";
+
+   string path = ResDir + "res_" + cid + ".json";
+   int fh = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(fh != INVALID_HANDLE) { FileWriteString(fh, payload); FileClose(fh); }
+   else Print("[LykhanBridge] FAILED to write candle result: ", path);
+
+   if(VerboseLog)
+      Print("[LykhanBridge] GET_CANDLES: ", sym, " ", tfStr,
+            " copied=", copied, " → ", path);
+}
+
+//+------------------------------------------------------------------+
+//| Map timeframe string to ENUM_TIMEFRAMES                          |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES StringToTimeframe(const string tf)
+{
+   if(tf == "M1")  return PERIOD_M1;
+   if(tf == "M5")  return PERIOD_M5;
+   if(tf == "M15") return PERIOD_M15;
+   if(tf == "H1")  return PERIOD_H1;
+   if(tf == "H4")  return PERIOD_H4;
+   if(tf == "D1")  return PERIOD_D1;
+   if(tf == "W1")  return PERIOD_W1;
+   if(tf == "MN1") return PERIOD_MN1;
+   Print("[LykhanBridge] Unknown timeframe: ", tf, " — defaulting to H1");
+   return PERIOD_H1;
+}
+
+//+------------------------------------------------------------------+
+//| BUY                                                              |
 //+------------------------------------------------------------------+
 void ExecuteBuy(const string cid, const string sym, double lots,
                 int slPips, int tpPips, const string cmt)
@@ -180,18 +226,15 @@ void ExecuteBuy(const string cid, const string sym, double lots,
    double price  = SymbolInfoDouble(sym, SYMBOL_ASK);
    double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-
-   // For a 5-digit broker, 1 pip = 10 points
    double sl = (slPips > 0) ? NormalizeDouble(price - slPips * point * 10, digits) : 0;
    double tp = (tpPips > 0) ? NormalizeDouble(price + tpPips * point * 10, digits) : 0;
-
    bool ok = Trade.Buy(lots, sym, price, sl, tp, cmt);
    if(ok) WriteSuccess(cid, Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
    else   WriteError(cid, (int)Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
 }
 
 //+------------------------------------------------------------------+
-//| Open a market SELL position                                      |
+//| SELL                                                             |
 //+------------------------------------------------------------------+
 void ExecuteSell(const string cid, const string sym, double lots,
                  int slPips, int tpPips, const string cmt)
@@ -199,19 +242,15 @@ void ExecuteSell(const string cid, const string sym, double lots,
    double price  = SymbolInfoDouble(sym, SYMBOL_BID);
    double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
-
-   // For SELL: SL is above entry, TP is below entry
    double sl = (slPips > 0) ? NormalizeDouble(price + slPips * point * 10, digits) : 0;
    double tp = (tpPips > 0) ? NormalizeDouble(price - tpPips * point * 10, digits) : 0;
-
    bool ok = Trade.Sell(lots, sym, price, sl, tp, cmt);
    if(ok) WriteSuccess(cid, Trade.ResultOrder(), Trade.ResultPrice(), 0, 0);
    else   WriteError(cid, (int)Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
 }
 
 //+------------------------------------------------------------------+
-//| Close a specific open position by ticket number                  |
-//| ticket is ulong to handle Deriv's large 64-bit ticket numbers    |
+//| CLOSE by ticket                                                  |
 //+------------------------------------------------------------------+
 void ExecuteClose(const string cid, ulong ticket, const string sym)
 {
@@ -220,7 +259,6 @@ void ExecuteClose(const string cid, ulong ticket, const string sym)
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double profit    = PositionGetDouble(POSITION_PROFIT);
       bool   ok        = Trade.PositionClose(ticket);
-
       if(ok)
       {
          double closePrice = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
@@ -234,19 +272,18 @@ void ExecuteClose(const string cid, ulong ticket, const string sym)
 }
 
 //+------------------------------------------------------------------+
-//| Close ALL positions matching the given magic number              |
+//| CLOSE_ALL                                                        |
 //+------------------------------------------------------------------+
 void ExecuteCloseAll(const string cid, int magic)
 {
    int closed = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(PositionSelectByTicket(ticket))
+      ulong t = PositionGetTicket(i);
+      if(PositionSelectByTicket(t))
          if((int)PositionGetInteger(POSITION_MAGIC) == magic || magic == 0)
-         { Trade.PositionClose(ticket); closed++; }
+         { Trade.PositionClose(t); closed++; }
    }
-
    string json = "{\"command_id\":\"" + cid + "\","
                + "\"status\":\"CLOSED\","
                + "\"ticket\":null,\"open_price\":null,\"close_price\":null,\"profit\":0,"
@@ -257,7 +294,7 @@ void ExecuteCloseAll(const string cid, int magic)
 }
 
 //+------------------------------------------------------------------+
-//| Write full account snapshot to status directory                  |
+//| GET_STATUS                                                       |
 //+------------------------------------------------------------------+
 void ExecuteGetStatus(const string cid)
 {
@@ -277,20 +314,20 @@ void ExecuteGetStatus(const string cid)
       if(i > 0) posArray += ",";
       string pt = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       posArray += "{"
-               + "\"ticket\":"         + IntegerToString((long)ticket)                            + ","
-               + "\"symbol\":\""       + PositionGetString(POSITION_SYMBOL)                       + "\","
-               + "\"action\":\""       + pt                                                        + "\","
-               + "\"lot_size\":"       + DoubleToString(PositionGetDouble(POSITION_VOLUME),    2) + ","
-               + "\"open_price\":"     + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN),5) + ","
+               + "\"ticket\":"         + IntegerToString((long)ticket)                              + ","
+               + "\"symbol\":\""       + PositionGetString(POSITION_SYMBOL)                         + "\","
+               + "\"action\":\""       + pt                                                          + "\","
+               + "\"lot_size\":"       + DoubleToString(PositionGetDouble(POSITION_VOLUME),      2) + ","
+               + "\"open_price\":"     + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN),  5) + ","
                + "\"current_price\":"  + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT),5) + ","
-               + "\"sl\":"             + DoubleToString(PositionGetDouble(POSITION_SL),        5) + ","
-               + "\"tp\":"             + DoubleToString(PositionGetDouble(POSITION_TP),        5) + ","
-               + "\"profit\":"         + DoubleToString(PositionGetDouble(POSITION_PROFIT),    2) + ","
-               + "\"swap\":"           + DoubleToString(PositionGetDouble(POSITION_SWAP),      2) + ","
-               + "\"magic\":"          + IntegerToString((int)PositionGetInteger(POSITION_MAGIC)) + ","
-               + "\"comment\":\""      + PositionGetString(POSITION_COMMENT)                      + "\","
+               + "\"sl\":"             + DoubleToString(PositionGetDouble(POSITION_SL),          5) + ","
+               + "\"tp\":"             + DoubleToString(PositionGetDouble(POSITION_TP),          5) + ","
+               + "\"profit\":"         + DoubleToString(PositionGetDouble(POSITION_PROFIT),      2) + ","
+               + "\"swap\":"           + DoubleToString(PositionGetDouble(POSITION_SWAP),        2) + ","
+               + "\"magic\":"          + IntegerToString((int)PositionGetInteger(POSITION_MAGIC))   + ","
+               + "\"comment\":\""      + PositionGetString(POSITION_COMMENT)                        + "\","
                + "\"open_time\":\""    + TimeToString((datetime)PositionGetInteger(POSITION_TIME),
-                                          TIME_DATE|TIME_SECONDS)                                  + "\""
+                                          TIME_DATE|TIME_SECONDS)                                    + "\""
                + "}";
    }
    posArray += "]";
@@ -309,11 +346,10 @@ void ExecuteGetStatus(const string cid)
    string statusFile = StatusDir + "status_" + cid + ".json";
    int fh = FileOpen(statusFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
    if(fh != INVALID_HANDLE) { FileWriteString(fh, snapshot); FileClose(fh); }
-   if(VerboseLog) Print("[LykhanBridge] Status snapshot written.");
 }
 
 //+------------------------------------------------------------------+
-//| Write EXECUTED result — ticket is ulong for Deriv compatibility  |
+//| Write EXECUTED result                                            |
 //+------------------------------------------------------------------+
 void WriteSuccess(const string cid, ulong ticket, double openPrice,
                   double closePrice, double profit)
@@ -330,7 +366,7 @@ void WriteSuccess(const string cid, ulong ticket, double openPrice,
 }
 
 //+------------------------------------------------------------------+
-//| Write REJECTED / ERROR result file                               |
+//| Write REJECTED result                                            |
 //+------------------------------------------------------------------+
 void WriteError(const string cid, int code, const string msg)
 {
@@ -339,31 +375,26 @@ void WriteError(const string cid, int code, const string msg)
    string json = "{\"command_id\":\"" + cid + "\","
                + "\"status\":\"REJECTED\","
                + "\"ticket\":null,\"open_price\":null,\"close_price\":null,\"profit\":null,"
-               + "\"error_code\":"     + IntegerToString(code) + ","
-               + "\"error_message\":\"" + escaped              + "\","
+               + "\"error_code\":"      + IntegerToString(code) + ","
+               + "\"error_message\":\"" + escaped               + "\","
                + "\"processed_at\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\"}";
    WriteResultFile(cid, json);
    Print("[LykhanBridge] Error ", code, ": ", msg);
 }
 
 //+------------------------------------------------------------------+
-//| Write any result JSON to the results sub-directory              |
+//| Write result file to results/                                    |
 //+------------------------------------------------------------------+
 void WriteResultFile(const string cid, const string json)
 {
    string path = ResDir + "res_" + cid + ".json";
    int fh = FileOpen(path, FILE_WRITE | FILE_TXT | FILE_ANSI);
-   if(fh != INVALID_HANDLE)
-   {
-      FileWriteString(fh, json);
-      FileClose(fh);
-      if(VerboseLog) Print("[LykhanBridge] Result → ", path);
-   }
+   if(fh != INVALID_HANDLE) { FileWriteString(fh, json); FileClose(fh); }
    else Print("[LykhanBridge] FAILED to write result: ", path, " err=", GetLastError());
 }
 
 //+------------------------------------------------------------------+
-//| Extract a string value from flat JSON by key                     |
+//| JSON string parser                                               |
 //+------------------------------------------------------------------+
 string JsonGetString(const string json, const string key)
 {
@@ -377,8 +408,7 @@ string JsonGetString(const string json, const string key)
 }
 
 //+------------------------------------------------------------------+
-//| Extract a numeric value from flat JSON by key                    |
-//| Handles unquoted numbers, quoted numbers, and null              |
+//| JSON number parser                                               |
 //+------------------------------------------------------------------+
 double JsonGetDouble(const string json, const string key)
 {

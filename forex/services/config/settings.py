@@ -70,7 +70,11 @@ class ForexSettings(BaseSettings):
     # ── Logging ──────────────────────────────────────────────────────────────
     log_level: str  = Field(default="INFO")
     log_file: Path  = Field(default=Path("logs/lykhan_forex.log"))
-
+    
+    redis_url: str = Field(
+            default="redis://localhost:6379/0",
+            description="Redis URL used by SessionBiasCache",
+        )
 
 # Module-level singleton — import this object everywhere in the forex
 # service layer instead of instantiating ForexSettings repeatedly.

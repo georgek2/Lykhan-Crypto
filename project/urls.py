@@ -20,4 +20,5 @@ from django.urls import path, include
 urlpatterns = [
     path('', include('arb_agent.urls')),
     path('admin/', admin.site.urls),
+    path('forex/', include('forex.urls'))
 ]

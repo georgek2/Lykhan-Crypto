@@ -3,17 +3,11 @@ forex/services/core/schemas.py
 ──────────────────────────────
 Pydantic domain models for all trade-related data structures.
 
-Named schemas.py rather than models.py to avoid confusion with Django's
-ORM models. Django models talk to the database — these Pydantic schemas
-validate and describe the shape of data flowing between Python and MT5.
-
 MT5 DateTime Format Note
 ─────────────────────────
-MT5 writes datetime strings in the format "2026.03.15 08:07:31" using
-dots as date separators. Pydantic expects ISO 8601 format with dashes
-like "2026-03-15T08:07:31". Every datetime field in this file has a
-field_validator that converts MT5's format to ISO 8601 before Pydantic
-attempts to parse it.
+MT5 writes datetime strings as "2026.03.15 08:07:31" (dots as date separators).
+Every datetime field has a field_validator that converts this to ISO 8601 before
+Pydantic parses it.
 """
 from __future__ import annotations
 
@@ -28,11 +22,12 @@ from pydantic import BaseModel, Field, field_validator
 # ── Enumerations ──────────────────────────────────────────────────────────────
 
 class TradeAction(str, Enum):
-    BUY        = "BUY"
-    SELL       = "SELL"
-    CLOSE      = "CLOSE"
-    CLOSE_ALL  = "CLOSE_ALL"
-    GET_STATUS = "GET_STATUS"
+    BUY         = "BUY"
+    SELL        = "SELL"
+    CLOSE       = "CLOSE"
+    CLOSE_ALL   = "CLOSE_ALL"
+    GET_STATUS  = "GET_STATUS"
+    GET_CANDLES = "GET_CANDLES"
 
 
 class TradeStatus(str, Enum):
@@ -49,22 +44,92 @@ class OrderType(str, Enum):
     STOP   = "STOP"
 
 
+class Timeframe(str, Enum):
+    M1  = "M1"
+    M5  = "M5"
+    M15 = "M15"
+    H1  = "H1"
+    H4  = "H4"
+    D1  = "D1"
+    W1  = "W1"
+
+
+class SessionBias(str, Enum):
+    """
+    The directional bias produced by the strategic LLM analysis every 30 minutes.
+    The HFT scanner reads this from Redis and only fires trades that align with it.
+    NEUTRAL means the LLM sees conflicting signals — HFT scanner pauses.
+    """
+    LONG    = "LONG"
+    SHORT   = "SHORT"
+    NEUTRAL = "NEUTRAL"
+
+
 # ── Shared datetime converter ─────────────────────────────────────────────────
 
 def _parse_mt5_dt(v: object) -> object:
-    """
-    Convert MT5's datetime format to ISO 8601 so Pydantic can parse it.
-
-    MT5 writes:       "2026.03.15 08:07:31"
-    Pydantic expects: "2026-03-15T08:07:31"
-
-    The two replacements are:
-      1. Replace the first two dots (date separators) with dashes
-      2. Replace the space between date and time with T
-    """
+    """Convert MT5 "2026.03.15 08:07:31" → "2026-03-15T08:07:31" for Pydantic."""
     if isinstance(v, str):
         return v.replace('.', '-', 2).replace(' ', 'T')
     return v
+
+
+# ── OHLCV Candle Models ───────────────────────────────────────────────────────
+
+class CandleBar(BaseModel):
+    """A single OHLCV candlestick bar returned from the MT5 EA."""
+    time:   datetime
+    open:   float
+    high:   float
+    low:    float
+    close:  float
+    volume: int
+
+    @field_validator('time', mode='before')
+    @classmethod
+    def parse_time(cls, v: object) -> object:
+        return _parse_mt5_dt(v)
+
+    @property
+    def body_size(self) -> float:
+        """Absolute size of the candle body in price units."""
+        return abs(self.close - self.open)
+
+    @property
+    def is_bullish(self) -> bool:
+        return self.close > self.open
+
+    @property
+    def is_bearish(self) -> bool:
+        return self.close < self.open
+
+
+class CandleData(BaseModel):
+    """A series of CandleBar objects for a given symbol and timeframe."""
+    symbol:     str
+    timeframe:  str
+    bars:       list[CandleBar]
+    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @property
+    def closes(self) -> list[float]:
+        return [b.close for b in self.bars]
+
+    @property
+    def highs(self) -> list[float]:
+        return [b.high for b in self.bars]
+
+    @property
+    def lows(self) -> list[float]:
+        return [b.low for b in self.bars]
+
+    @property
+    def volumes(self) -> list[int]:
+        return [b.volume for b in self.bars]
+
+    @property
+    def latest(self) -> CandleBar | None:
+        return self.bars[-1] if self.bars else None
 
 
 # ── Command: Python → MT5 ─────────────────────────────────────────────────────
@@ -86,6 +151,8 @@ class TradeCommand(BaseModel):
     magic:      int           = Field(default=20240101)
     comment:    str           = Field(default="lykhan-forex")
     ticket:     Optional[int] = Field(default=None)
+    timeframe:  str           = Field(default="H1")
+    count:      int           = Field(default=100)
     timestamp:  datetime      = Field(default_factory=datetime.utcnow)
 
     model_config = {"use_enum_values": True}
@@ -94,18 +161,15 @@ class TradeCommand(BaseModel):
 # ── Result: MT5 → Python ──────────────────────────────────────────────────────
 
 class TradeResult(BaseModel):
-    """
-    The outcome written by the MQL5 EA after processing a TradeCommand.
-    Python parses this from res_<command_id>.json in the results/ directory.
-    """
+    """The outcome written by the MQL5 EA after processing a TradeCommand."""
     command_id:    str
     status:        TradeStatus
-    ticket:        Optional[int]      = None
-    open_price:    Optional[float]    = None
-    close_price:   Optional[float]    = None
-    profit:        Optional[float]    = None
-    error_code:    Optional[int]      = None
-    error_message: Optional[str]      = None
+    ticket:        Optional[int]   = None
+    open_price:    Optional[float] = None
+    close_price:   Optional[float] = None
+    profit:        Optional[float] = None
+    error_code:    Optional[int]   = None
+    error_message: Optional[str]   = None
     processed_at:  Optional[datetime] = None
 
     model_config = {"use_enum_values": True}
@@ -143,10 +207,7 @@ class Position(BaseModel):
 # ── Account Snapshot ──────────────────────────────────────────────────────────
 
 class AccountSnapshot(BaseModel):
-    """
-    A complete picture of the trading account at a single point in time.
-    Returned by the GET_STATUS command.
-    """
+    """A complete picture of the trading account at a single point in time."""
     balance:       float
     equity:        float
     margin:        float
@@ -168,3 +229,9 @@ class AccountSnapshot(BaseModel):
     @property
     def total_floating_pnl(self) -> float:
         return sum(p.profit for p in self.positions)
+
+    @property
+    def drawdown_pct(self) -> float:
+        if self.balance <= 0:
+            return 0.0
+        return round((1 - self.equity / self.balance) * 100, 2)

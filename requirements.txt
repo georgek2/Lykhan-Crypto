@@ -105,3 +105,22 @@ click>=8.1.7
 # Uncomment when you're ready to integrate external signals.
 # -----------------------------------------------------------------------------
 # httpx>=0.27.0
+
+
+# Async task queue
+celery>=5.3.6
+redis>=5.0.3
+
+# Django Channels (WebSocket dashboard)
+channels>=4.0.0
+channels-redis>=4.2.0
+daphne>=4.0.0           # ASGI server for channels (replaces runserver for WS)
+
+# LLM providers
+groq>=0.9.0
+google-generativeai>=0.7.0
+
+
+
+
+

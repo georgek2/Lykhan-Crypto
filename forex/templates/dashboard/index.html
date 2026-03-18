@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lykhan — Live Dashboard</title>
+<style>
+  :root {
+    --bg:       #0d0f14;
+    --surface:  #161b24;
+    --border:   #252d3a;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --green:    #22c55e;
+    --red:      #ef4444;
+    --amber:    #f59e0b;
+    --blue:     #3b82f6;
+    --purple:   #a78bfa;
+    --teal:     #14b8a6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .logo { font-size: 16px; font-weight: 700; letter-spacing: 0.05em; color: var(--teal); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+  .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #conn-status { color: var(--muted); font-size: 12px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-card {
+    background: var(--surface); padding: 16px 20px;
+  }
+  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .stat-value { font-size: 22px; font-weight: 700; }
+  .stat-sub   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  .neu { color: var(--muted); }
+
+  .panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 1px; background: var(--border);
+    min-height: calc(100vh - 120px);
+  }
+  .panel {
+    background: var(--surface);
+    display: flex; flex-direction: column;
+  }
+  .panel-header {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+  .panel-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: var(--border); color: var(--muted); }
+  .panel-body  { padding: 12px 16px; overflow-y: auto; flex: 1; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-size: 10px; text-transform: uppercase;
+       letter-spacing: 0.08em; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 8px; border-bottom: 1px solid var(--border); color: var(--text); font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  .tag-buy     { background: rgba(34,197,94,0.15);  color: var(--green); }
+  .tag-sell    { background: rgba(239,68,68,0.15);   color: var(--red); }
+  .tag-exec    { background: rgba(59,130,246,0.15);  color: var(--blue); }
+  .tag-reject  { background: rgba(239,68,68,0.1);    color: var(--red); }
+  .tag-pending { background: rgba(245,158,11,0.15);  color: var(--amber); }
+  .tag-hft     { background: rgba(167,139,250,0.15); color: var(--purple); }
+  .tag-signal  { background: rgba(20,184,166,0.15);  color: var(--teal); }
+
+  .bias-card {
+    padding: 16px; border-radius: 6px; border: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .bias-long    { border-color: rgba(34,197,94,0.3);  background: rgba(34,197,94,0.05); }
+  .bias-short   { border-color: rgba(239,68,68,0.3);  background: rgba(239,68,68,0.05); }
+  .bias-neutral { border-color: var(--border); }
+  .bias-label   { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+  .bias-reason  { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .bias-meta    { margin-top: 8px; color: var(--muted); font-size: 11px; }
+  .conf-bar     { height: 4px; border-radius: 2px; background: var(--border); margin-top: 8px; }
+  .conf-fill    { height: 100%; border-radius: 2px; background: var(--teal); transition: width 0.4s; }
+
+  .feed-item {
+    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .feed-item:last-child { border-bottom: none; }
+  .feed-time   { color: var(--muted); font-size: 10px; }
+  .feed-signal { color: var(--amber); }
+  .feed-trade  { color: var(--teal); }
+  .feed-llm    { color: var(--purple); }
+
+  #no-positions { color: var(--muted); padding: 16px 0; text-align: center; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">LYKHAN</div>
+  <div id="conn-status"><span class="status-dot" id="dot"></span>Connecting…</div>
+</header>
+
+<div class="grid">
+  <div class="stat-card">
+    <div class="stat-label">Balance</div>
+    <div class="stat-value" id="balance">—</div>
+    <div class="stat-sub" id="account-mode">demo</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Equity</div>
+    <div class="stat-value" id="equity">—</div>
+    <div class="stat-sub" id="drawdown">drawdown —%</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Floating P&L</div>
+    <div class="stat-value" id="floating-pnl">—</div>
+    <div class="stat-sub" id="open-trades">— positions open</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Free Margin</div>
+    <div class="stat-value" id="free-margin">—</div>
+    <div class="stat-sub" id="margin-level">margin level —%</div>
+  </div>
+</div>
+
+<div class="panels">
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Open positions</span>
+      <span class="panel-badge" id="pos-count">0</span>
+    </div>
+    <div class="panel-body">
+      <div id="no-positions">No open positions</div>
+      <table id="pos-table" style="display:none">
+        <thead><tr>
+          <th>Ticket</th><th>Symbol</th><th>Type</th>
+          <th>Lots</th><th>Entry</th><th>Current</th><th>P&L</th>
+        </tr></thead>
+        <tbody id="pos-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Session bias</span>
+      <span class="panel-badge" id="bias-model">—</span>
+    </div>
+    <div class="panel-body">
+      <div class="bias-card bias-neutral" id="bias-card">
+        <div class="bias-label" id="bias-label">⚪ NEUTRAL</div>
+        <div class="bias-reason" id="bias-reason">Waiting for first LLM analysis…</div>
+        <div class="bias-meta" id="bias-meta"></div>
+        <div class="conf-bar"><div class="conf-fill" id="conf-fill" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Trade log</span>
+      <span class="panel-badge" id="trade-count">0</span>
+    </div>
+    <div class="panel-body" style="padding:0">
+      <table>
+        <thead><tr>
+          <th style="padding-left:16px">Time</th><th>Symbol</th>
+          <th>Action</th><th>Status</th><th>Source</th><th>P&L</th>
+        </tr></thead>
+        <tbody id="trade-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Activity feed</span>
+    </div>
+    <div class="panel-body" id="feed-body"></div>
+  </div>
+
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}/ws/dashboard/`);
+const dot = document.getElementById('dot');
+const connStatus = document.getElementById('conn-status');
+
+ws.onopen = () => {
+  dot.classList.add('live');
+  connStatus.innerHTML = '<span class="status-dot live"></span>Live';
+};
+ws.onclose = () => {
+  dot.classList.remove('live');
+  connStatus.innerHTML = '<span class="status-dot"></span>Disconnected — reload to reconnect';
+};
+ws.onerror = () => {
+  connStatus.innerHTML = '<span class="status-dot"></span>Connection error';
+};
+
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.event === 'initial_state') {
+    if (msg.snapshot && !msg.snapshot.error) updateAccount(msg.snapshot);
+    if (msg.trades)  renderTrades(msg.trades);
+    if (msg.bias)    updateBias(msg.bias);
+  } else if (msg.event === 'account_tick') {
+    updateAccount(msg.payload);
+  } else if (msg.event === 'bias_update') {
+    updateBias(msg);
+    addFeed('llm', `Bias updated: ${msg.bias} (${msg.confidence}% confidence via ${msg.model_used})`);
+  } else if (msg.event === 'trade_event') {
+    addFeed('trade', `${msg.payload.signal || msg.payload.action} ${msg.payload.symbol || 'EURUSD'} — ${msg.payload.outcome}`);
+  }
+};
+
+function fmt(n, decimals=2) {
+  if (n == null) return '—';
+  const sign = n >= 0 ? '+' : '';
+  return sign + Number(n).toFixed(decimals);
+}
+function fmtPrice(n) { return n != null ? Number(n).toFixed(5) : '—'; }
+function cls(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : 'neu'; }
+
+function updateAccount(s) {
+  document.getElementById('balance').textContent = s.balance != null ? s.balance.toFixed(2) : '—';
+  const eq = document.getElementById('equity');
+  eq.textContent = s.equity != null ? s.equity.toFixed(2) : '—';
+  eq.className = `stat-value ${cls(s.equity - s.balance)}`;
+  const pnl = document.getElementById('floating-pnl');
+  pnl.textContent = fmt(s.floating_pnl);
+  pnl.className = `stat-value ${cls(s.floating_pnl)}`;
+  document.getElementById('free-margin').textContent = s.free_margin != null ? s.free_margin.toFixed(2) : '—';
+  document.getElementById('drawdown').textContent = `drawdown ${(s.drawdown_pct||0).toFixed(1)}%`;
+  document.getElementById('open-trades').textContent = `${s.open_trades || 0} positions open`;
+  document.getElementById('margin-level').textContent = `margin level ${(s.margin_level||0).toFixed(0)}%`;
+  document.getElementById('pos-count').textContent = s.open_trades || 0;
+  renderPositions(s.positions || []);
+}
+
+function renderPositions(positions) {
+  const tbody = document.getElementById('pos-body');
+  const table = document.getElementById('pos-table');
+  const none  = document.getElementById('no-positions');
+  tbody.innerHTML = '';
+  if (!positions.length) { table.style.display='none'; none.style.display='block'; return; }
+  table.style.display='table'; none.style.display='none';
+  positions.forEach(p => {
+    const tr = document.createElement('tr');
+    const pnlClass = p.profit > 0 ? 'pos' : p.profit < 0 ? 'neg' : 'neu';
+    tr.innerHTML = `
+      <td>${p.ticket}</td>
+      <td>${p.symbol}</td>
+      <td><span class="tag tag-${p.action.toLowerCase()}">${p.action}</span></td>
+      <td>${p.lot_size.toFixed(2)}</td>
+      <td>${fmtPrice(p.open_price)}</td>
+      <td>${fmtPrice(p.current_price)}</td>
+      <td class="${pnlClass}">${fmt(p.profit)}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderTrades(trades) {
+  const tbody = document.getElementById('trade-body');
+  document.getElementById('trade-count').textContent = trades.length;
+  tbody.innerHTML = '';
+  trades.slice(0, 40).forEach(t => {
+    const tr = document.createElement('tr');
+    const time = t.received_at ? new Date(t.received_at).toLocaleTimeString() : '—';
+    const srcTag = t.signal_source === 'llm' ? 'hft' : 'signal';
+    const pnlClass = (t.profit||0) > 0 ? 'pos' : (t.profit||0) < 0 ? 'neg' : 'neu';
+    const statusTag = {EXECUTED:'exec',REJECTED:'reject',PENDING:'pending',CLOSED:'exec'}[t.status]||'pending';
+    tr.innerHTML = `
+      <td style="padding-left:16px;color:var(--muted)">${time}</td>
+      <td>${t.symbol}</td>
+      <td><span class="tag tag-${t.action.toLowerCase()}">${t.action}</span></td>
+      <td><span class="tag tag-${statusTag}">${t.status}</span></td>
+      <td><span class="tag tag-${srcTag}">${t.signal_source}</span></td>
+      <td class="${pnlClass}">${t.profit != null ? fmt(t.profit) : '—'}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function updateBias(data) {
+  const card   = document.getElementById('bias-card');
+  const label  = document.getElementById('bias-label');
+  const reason = document.getElementById('bias-reason');
+  const meta   = document.getElementById('bias-meta');
+  const fill   = document.getElementById('conf-fill');
+  const model  = document.getElementById('bias-model');
+
+  const icons = { LONG:'📈', SHORT:'📉', NEUTRAL:'⚪' };
+  const bias  = data.bias || 'NEUTRAL';
+  label.textContent  = `${icons[bias]||'⚪'} ${bias}`;
+  reason.textContent = data.reasoning || '';
+  meta.textContent   = `${data.confidence||0}% confidence`;
+  fill.style.width   = `${data.confidence||0}%`;
+  model.textContent  = data.model_used || '—';
+
+  card.className = `bias-card bias-${bias.toLowerCase()}`;
+}
+
+function addFeed(type, text) {
+  const feed = document.getElementById('feed-body');
+  const div  = document.createElement('div');
+  div.className = 'feed-item';
+  const time = new Date().toLocaleTimeString();
+  div.innerHTML = `<div class="feed-time">${time}</div><div class="feed-${type}">${text}</div>`;
+  feed.insertBefore(div, feed.firstChild);
+  // Keep feed to 50 items
+  while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+</script>
+</body>
+</html>

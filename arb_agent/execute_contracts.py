@@ -35,6 +35,8 @@ class ArbitrageAgent:
     def sell(self, symbol: str, quantity: float, price: float):
         ''' 
         Sells pair bought earlier for a reasonable profit
+
+        Or takes shot trades if price is going down
         '''
         self.logger.info(
             f'Sell requested: {symbol} - {quantity} ...Price: {price}' 

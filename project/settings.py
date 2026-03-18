@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-@sd)5_h3(j+(bm_@u6ns75z!loofk!l18x%lay@h%&+9*jtdt-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "*"]
 
 
 # Application definition
@@ -37,6 +37,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'channels',
+    'channels_redis',
     'arb_agent',
     'forex'
 ]
@@ -56,7 +58,7 @@ ROOT_URLCONF = 'project.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'forex' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -69,6 +71,71 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'project.wsgi.application'
+
+ASGI_APPLICATION = "project.routing.application"
+ 
+# ── Django Channels / Redis ───────────────────────────────────────
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG":  {"hosts": [("127.0.0.1", 6379)]},
+    }
+}
+
+# ── Celery ────────────────────────────────────────────────────────
+CELERY_BROKER_URL        = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND    = "redis://localhost:6379/0"
+CELERY_ACCEPT_CONTENT    = ["json"]
+CELERY_TASK_SERIALIZER   = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE          = "UTC"
+CELERY_WORKER_CONCURRENCY = 1   # SQLite safe; remove when on Postgres
+
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    "strategic-analysis": {
+        "task":     "forex.run_strategic_analysis",
+        "schedule": 1800,
+        "args":     ("EURUSD",),
+    },
+    "hft-scan": {
+        "task":     "forex.run_hft_scan",
+        "schedule": 30,
+        "args":     ("EURUSD",),
+    },
+    "telegram-summary": {
+        "task":     "forex.send_telegram_summary",
+        "schedule": 1800,
+    },
+    "bridge-health": {
+        "task":     "forex.check_bridge_health",
+        "schedule": 300,
+    },
+}
+
+# ── Logging ───────────────────────────────────────────────────────
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {"format": "{asctime} {levelname} {name} {message}", "style": "{"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "verbose"},
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "forex":     {"level": "DEBUG", "propagate": True},
+        "arb_agent": {"level": "DEBUG", "propagate": True},
+        "celery":    {"level": "INFO",  "propagate": True},
+    },
+}
+
+# ── Deriv account mode (demo / live) ─────────────────────────────
+# Switch to 'live' when you're ready for real trading.
+# The codebase reads this for logging and Telegram message labelling.
+import os as _os
+DERIV_ACCOUNT_MODE = _os.getenv("DERIV_ACCOUNT_MODE", "demo")
 
 
 # Database
