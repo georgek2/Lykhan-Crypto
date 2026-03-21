@@ -72,7 +72,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'project.wsgi.application'
 
-ASGI_APPLICATION = "project.routing.application"
+ASGI_APPLICATION = "project.asgi.application"
  
 # ── Django Channels / Redis ───────────────────────────────────────
 CHANNEL_LAYERS = {
@@ -92,6 +92,20 @@ CELERY_TIMEZONE          = "UTC"
 CELERY_WORKER_CONCURRENCY = 1   # SQLite safe; remove when on Postgres
 
 from celery.schedules import crontab
+
+# ── Celery Queues ─────────────────────────────────────────────────
+CELERY_TASK_QUEUES = {
+    "trades": {
+        "exchange": "trades",
+        "routing_key": "trades",
+    },
+    "celery": {
+        "exchange": "celery",
+        "routing_key": "celery",
+    },
+}
+CELERY_TASK_DEFAULT_QUEUE = "celery"
+
 CELERY_BEAT_SCHEDULE = {
     "strategic-analysis": {
         "task":     "forex.run_strategic_analysis",
@@ -102,6 +116,16 @@ CELERY_BEAT_SCHEDULE = {
         "task":     "forex.run_hft_scan",
         "schedule": 30,
         "args":     ("EURUSD",),
+    },
+    "strategic-analysis-btcusd": {   
+        "task":     "forex.run_strategic_analysis",
+        "schedule": 1800,
+        "args":     ("BTCUSD",),
+    },
+    "hft-scan-btcusd": {             
+        "task":     "forex.run_hft_scan",
+        "schedule": 30,
+        "args":     ("BTCUSD",),
     },
     "telegram-summary": {
         "task":     "forex.send_telegram_summary",

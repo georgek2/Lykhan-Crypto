@@ -32,6 +32,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from forex.services.core.market_hours import is_market_open, get_closed_reason
 from forex.services.core.schemas import SessionBias, TradeResult
 from forex.services.core.trade_executor import TradeExecutor, TradeValidationError
 from forex.services.market.bias_cache import SessionBiasCache
@@ -84,8 +85,19 @@ class HFTScanner:
             return {"outcome": "error", "error": str(exc), "symbol": self.symbol}
 
     def _run_scan(self) -> dict:
+
+        # ── 0. Market hours check ─────────────────────────────────────────────
+        if not is_market_open(self.symbol):
+            logger.debug("HFTScanner: %s", get_closed_reason(self.symbol))
+            return {
+                "outcome": "skipped",
+                "reason":  "market_closed",
+                "symbol":  self.symbol,
+            }
+
         # ── 1. Read session bias ───────────────────────────────────────────────
         record = self._cache.get(self.symbol)
+
         if record is None:
             logger.debug("HFTScanner: no bias in Redis for %s — skipping", self.symbol)
             return {"outcome": "skipped", "reason": "no_bias", "symbol": self.symbol}
@@ -121,6 +133,11 @@ class HFTScanner:
             p for p in snapshot.positions
             if p.comment.startswith(SCALP_COMMENT)
         ]
+
+        # Always check for early exits on open positions
+        if scalp_positions:
+            self._check_early_exits(scalp_positions)
+
         if len(scalp_positions) >= MAX_SCALP_TRADES:
             # Check for early exit opportunities instead of opening new ones
             exits = self._check_early_exits(scalp_positions)
@@ -143,12 +160,19 @@ class HFTScanner:
                 "indicators": ind,
             }
 
-        # ── 5. ATR-based position sizing ──────────────────────────────────────
+       # ── 5. ATR-based position sizing ──────────────────────────────────────
         sl_pips = ind.get("atr_sl_pips") or 30
         tp_pips = ind.get("atr_tp_pips") or 60
-        # Cap at reasonable limits for M1 scalping
-        sl_pips = max(10, min(sl_pips, 50))
-        tp_pips = max(20, min(tp_pips, 100))
+
+        # Cap at symbol-aware limits for M1 scalping
+        # Crypto pairs (BTC, ETH) use dollar-based stops, not pip-based
+        if any(crypto in self.symbol for crypto in ("BTC", "ETH", "XRP", "LTC", "BCH")):
+            sl_pips = 200
+            tp_pips = 400
+        else:
+            # Forex pairs — standard pip limits
+            sl_pips = max(10, min(sl_pips, 50))
+            tp_pips = max(20, min(tp_pips, 100))
 
         # ── 6. Execute the scalp trade ────────────────────────────────────────
         try:
@@ -197,37 +221,48 @@ class HFTScanner:
         """
         Returns "BUY", "SELL", or None.
 
-        Entry conditions for LONG bias:
-          - EMA 9 > EMA 21 (or golden cross just occurred)
-          - RSI between 40 and RSI_OVERBOUGHT (momentum without exhaustion)
-          - MACD histogram positive or bullish_increasing
+        Two entry modes:
+        1. EXTREME RSI — immediate reversal entry regardless of bias
+        RSI < 25 → BUY (oversold bounce)
+        RSI > 75 → SELL (overbought reversal)
 
-        Entry conditions for SHORT bias:
-          - EMA 9 < EMA 21 (or death cross just occurred)
-          - RSI between RSI_OVERSOLD and 60
-          - MACD histogram negative or bearish_increasing
+        2. TREND FOLLOW — normal bias-aligned entry
+        Requires EMA alignment + RSI in range + MACD confirmation
         """
-        ema9         = indicators.get("ema9")
-        ema21        = indicators.get("ema21")
-        rsi_val      = indicators.get("rsi")
-        macd_dir     = indicators.get("macd_direction", "neutral")
-        ema_cross    = indicators.get("ema_cross", "none")
+        ema9      = indicators.get("ema9")
+        ema21     = indicators.get("ema21")
+        rsi_val   = indicators.get("rsi")
+        macd_dir  = indicators.get("macd_direction", "neutral")
+        ema_cross = indicators.get("ema_cross", "none")
 
-        # Need enough valid indicator data to make a decision
         if any(v is None for v in [ema9, ema21, rsi_val]):
             return None
 
+        # ── Mode 1: Extreme RSI reversal (highest priority) ───────────────────
+        if rsi_val <= 25:
+            logger.info(
+                "HFTScanner: EXTREME OVERSOLD rsi=%.2f — reversal BUY signal", rsi_val
+            )
+            return "BUY"
+
+        if rsi_val >= 75:
+            logger.info(
+                "HFTScanner: EXTREME OVERBOUGHT rsi=%.2f — reversal SELL signal", rsi_val
+            )
+            return "SELL"
+
+        # ── Mode 2: Trend follow — requires bias alignment ────────────────────
         if bias == SessionBias.LONG:
-            ema_aligned    = ema9 > ema21 or ema_cross == "golden"
-            rsi_ok         = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
-            macd_ok        = macd_dir in ("bullish_increasing", "bullish_weakening")
+            ema_aligned = ema9 > ema21 or ema_cross == "golden"
+            rsi_ok      = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
+            macd_ok     = macd_dir in ("bullish_increasing", "bullish_weakening")
             if ema_aligned and rsi_ok and macd_ok:
                 return "BUY"
 
         elif bias == SessionBias.SHORT:
-            ema_aligned    = ema9 < ema21 or ema_cross == "death"
-            rsi_ok         = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
-            macd_ok        = macd_dir in ("bearish_increasing", "bearish_weakening")
+            ema_aligned = ema9 < ema21 or ema_cross == "death"
+            rsi_ok      = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
+            macd_ok     = macd_dir in ("bearish_increasing", "bearish_weakening")
             if ema_aligned and rsi_ok and macd_ok:
                 return "SELL"
 

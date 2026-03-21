@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
     max_retries=3,
     default_retry_delay=15,
     name="forex.process_trade_signal",
+    queue="trades",
 )
 def process_trade_signal(self, trade_log_id: int) -> dict:
     """
@@ -209,10 +210,19 @@ def run_strategic_analysis(symbol: str = "EURUSD") -> dict:
     Fetches multi-timeframe OHLCV data, sends to LLM for market analysis,
     stores session bias in Redis. Runs every 30 minutes via Celery Beat.
     """
+    from forex.services.core.market_hours import is_market_open
     from forex.services.market.ohlcv import OHLCVFetcher
     from forex.services.llm.chart_analyzer import ChartAnalyzer
     from forex.services.market.bias_cache import SessionBiasCache
     from forex.services.notifications.telegram import TelegramNotifier
+
+    # Skip if market is closed
+    if not is_market_open(symbol):
+        logger.info(
+            "run_strategic_analysis: %s market closed — skipping", symbol
+        )
+        return {"outcome": "skipped", "reason": "market_closed", "symbol": symbol}
+
 
     logger.info("run_strategic_analysis: starting for %s", symbol)
 
@@ -282,7 +292,7 @@ def run_hft_scan(symbol: str = "EURUSD") -> dict:
     notifier = TelegramNotifier()
     outcome  = scanner.scan()
 
-    if outcome.get("outcome") == "executed":
+    if outcome.get("outcome") == "executed" and outcome.get("ticket") is not None:
         # Persist to TradeLog
         try:
             log = TradeLog.objects.create(

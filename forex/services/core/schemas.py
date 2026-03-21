@@ -142,7 +142,7 @@ class TradeCommand(BaseModel):
     command_id: str           = Field(default_factory=lambda: str(uuid.uuid4()))
     action:     TradeAction
     symbol:     str           = Field(default="EURUSD")
-    lot_size:   float         = Field(default=0.01, ge=0.01, le=100.0)
+    lot_size:   float         = Field(default=0.01, ge=0.01, le=5000.0)
     order_type: OrderType     = Field(default=OrderType.MARKET)
     price:      float         = Field(default=0.0)
     sl_pips:    int           = Field(default=0)

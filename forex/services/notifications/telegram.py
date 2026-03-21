@@ -101,8 +101,8 @@ class TelegramNotifier:
             f"🤖 *Lykhan — Trade Opened*\n\n"
             f"Pair:       `{_escape(symbol)}`\n"
             f"Direction:  {direction}\n"
-            f"Entry:      `{price:.5f}`\n"
-            f"Ticket:     `{ticket}`\n"
+            f"Entry:      `{f'{price:.5f}' if price is not None else 'N/A'}`\n"
+            f"Ticket:     `{ticket or 'pending'}`\n"
             f"SL:         `{sl_pips}` pips\n"
             f"TP:         `{tp_pips}` pips\n"
             f"Source:     {_escape(tag)}\n"
@@ -128,7 +128,7 @@ class TelegramNotifier:
             f"Direction:   `{action}`\n"
             f"Entry:       `{open_price:.5f}`\n"
             f"Exit:        `{close_price:.5f}`\n"
-            f"P&L:         `{sign}{profit:.2f}`\n"
+            f"P&L:         `{_escape(f'{sign}{profit:.2f}')}`\n"
             f"Ticket:      `{ticket}`\n"
             f"Time:        {_escape(datetime.now(timezone.utc).strftime('%H:%M:%S UTC'))}"
         )
@@ -153,10 +153,10 @@ class TelegramNotifier:
         text = (
             f"📊 *Lykhan — 30min Summary*\n\n"
             f"Balance:     `{balance:.2f}`\n"
-            f"Equity:      `{equity:.2f}` \\({eq_sign}{equity_change:.2f}\\)\n"
+            f"Equity:      `{equity:.2f}` \\({_escape(f'{eq_sign}{equity_change:.2f}')}\\)\n"
             f"Open trades: `{open_trades}`\n"
             f"Trades run:  `{trades_count}` this period\n"
-            f"Net P&L:     `{sign}{net_pnl:.2f}`\n"
+            f"Net P&L:     `{_escape(f'{sign}{net_pnl:.2f}')}`\n"
             f"Session bias: {bias_str} \\(`{bias_confidence}%` confidence\\)\n"
             f"Time:        {_escape(datetime.now(timezone.utc).strftime('%H:%M UTC'))}"
         )

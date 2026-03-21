@@ -280,9 +280,11 @@ function renderPositions(positions) {
 
 function renderTrades(trades) {
   const tbody = document.getElementById('trade-body');
-  document.getElementById('trade-count').textContent = trades.length;
+  // Filter out ERROR trades from display
+  const validTrades = trades.filter(t => t.status !== 'ERROR');
+  document.getElementById('trade-count').textContent = validTrades.length;
   tbody.innerHTML = '';
-  trades.slice(0, 40).forEach(t => {
+  validTrades.slice(0, 40).forEach(t => {
     const tr = document.createElement('tr');
     const time = t.received_at ? new Date(t.received_at).toLocaleTimeString() : '—';
     const srcTag = t.signal_source === 'llm' ? 'hft' : 'signal';

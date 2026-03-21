@@ -78,7 +78,14 @@ class FileBridge:
         cmd_file = self._cmd_dir    / f"cmd_{command.command_id}.json"
         res_file = self._result_dir / f"res_{command.command_id}.json"
 
-        cmd_file.write_text(command.model_dump_json(), encoding="utf-8")
+        # Compact JSON — no spaces after colons/commas — required by MQL5 parser
+        import json
+        payload = json.dumps(
+            json.loads(command.model_dump_json()),
+            separators=(',', ':')
+        )
+        cmd_file.write_text(payload, encoding="utf-8")
+
         result = self._poll_for_result(res_file, command.command_id)
 
         self._safe_delete(cmd_file)
@@ -140,7 +147,7 @@ class FileBridge:
             "symbol":     symbol,
             "timeframe":  timeframe,
             "count":      count,
-        })
+        }, separators=(',', ':'))
         cmd_file.write_text(payload, encoding="utf-8")
 
         deadline = time.monotonic() + self._timeout

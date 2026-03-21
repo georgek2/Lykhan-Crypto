@@ -39,6 +39,9 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,34 +184,31 @@ class GeminiProvider:
 
     def call(self, context: dict, timeout_seconds: int = 10) -> LLMResponse:
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
         except ImportError as exc:
-            raise ProviderError("google-generativeai not installed. Run: pip install google-generativeai") from exc
+            raise ProviderError("google-genai not installed. Run: pip install google-genai") from exc
 
-        genai.configure(api_key=self._api_key)
-        model = genai.GenerativeModel(
-            model_name    = self.MODEL,
-            system_instruction = SYSTEM_PROMPT,
-            generation_config  = genai.GenerationConfig(
-                temperature       = 0.1,
-                max_output_tokens = 200,
-                response_mime_type = "application/json",
-            ),
-        )
+        client = genai.Client(api_key=self._api_key)
 
         start = time.monotonic()
         try:
-            response = model.generate_content(_build_prompt(context),
-                                              request_options={"timeout": timeout_seconds})
+            response = client.models.generate_content(
+                model    = "gemini-2.0-flash",
+                contents = _build_prompt(context),
+                config   = types.GenerateContentConfig(
+                    system_instruction = SYSTEM_PROMPT,
+                    temperature        = 0.1,
+                    max_output_tokens  = 200,
+                ),
+            )
             latency_ms = int((time.monotonic() - start) * 1000)
             raw = response.text
             return _parse_response(raw, f"gemini/{self.MODEL}", latency_ms)
         except Exception as exc:
             raise ProviderError(f"Gemini API call failed: {exc}") from exc
 
-
-# ── Provider 3: Ollama (local, offline) ───────────────────────────────────────
-
+# ── Provider 3: Ollama (offline fallback) ───────────────────────────────────
 class OllamaProvider:
     """
     Last-resort offline fallback. Runs locally via Ollama on CPU.

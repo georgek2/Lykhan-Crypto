@@ -23,6 +23,9 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from forex.services.core.schemas import CandleData, SessionBias
 from forex.services.market.ohlcv import compute_indicators
@@ -36,7 +39,7 @@ from forex.services.llm.providers import (
 logger = logging.getLogger(__name__)
 
 
-CHART_ANALYSIS_SYSTEM_PROMPT = """You are a professional forex market analyst specialising in EURUSD intraday scalping.
+CHART_ANALYSIS_SYSTEM_PROMPT = """You are a professional crypto and forex market analyst.
 
 You will receive OHLCV candlestick data and computed technical indicators across multiple timeframes:
   - W1 (weekly): macro trend direction
@@ -47,14 +50,17 @@ You will receive OHLCV candlestick data and computed technical indicators across
 Your job is to synthesise all timeframes and produce a directional bias for the next 30 minutes.
 
 Decision rules:
-1. If H1 and D1 align in direction AND M5 confirms → strong bias (confidence 75-95)
-2. If H1 and D1 align but M5 contradicts → moderate bias (confidence 50-74)
-3. If H1 contradicts D1 → NEUTRAL (conflicting timeframes, pause trading)
-4. RSI above 70 on H1 = overbought → avoid LONG bias
-5. RSI below 30 on H1 = oversold → avoid SHORT bias
-6. MACD histogram increasing on H1 = momentum confirmation
-7. EMA golden cross on H1 = bullish confirmation
-8. EMA death cross on H1 = bearish confirmation
+1. If H1 and D1 BOTH agree in direction → strong bias (confidence 70-90)
+2. If H1 agrees with D1 but W1 conflicts → moderate bias (confidence 50-69)
+3. If H1 and M5 agree but D1 is neutral → moderate bias (confidence 50-65)
+4. Only return NEUTRAL if H1 directly contradicts D1 with strong opposing signals
+5. RSI above 75 on H1 = overbought → reduce confidence by 20, avoid LONG
+6. RSI below 25 on H1 = oversold → reduce confidence by 20, avoid SHORT
+7. MACD histogram increasing = momentum confirmation → add 10 to confidence
+8. EMA golden cross on H1 = bullish confirmation
+9. EMA death cross on H1 = bearish confirmation
+10. For crypto (BTCUSD, ETHUSD etc) — timeframe conflicts are normal, 
+    weight H1 and M5 most heavily, do not default to NEUTRAL too quickly
 
 You MUST respond with ONLY valid JSON — no preamble, no markdown:
 {
@@ -66,7 +72,6 @@ You MUST respond with ONLY valid JSON — no preamble, no markdown:
   "recommended_sl_pips": integer,
   "recommended_tp_pips": integer
 }"""
-
 
 @dataclass
 class AnalysisResult:
@@ -197,7 +202,7 @@ class ChartAnalyzer:
         )
 
     def _try_groq(self, prompt: str) -> tuple[str, str]:
-        provider = GroqProvider()
+       
         import os
         from groq import Groq
         client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=10)
@@ -212,21 +217,24 @@ class ChartAnalyzer:
             response_format = {"type": "json_object"},
         )
         return resp.choices[0].message.content, "groq/llama-3.3-70b-versatile"
+        
 
     def _try_gemini(self, prompt: str) -> tuple[str, str]:
-        import os, google.generativeai as genai
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel(
-            model_name         = "gemini-2.0-flash",
-            system_instruction = CHART_ANALYSIS_SYSTEM_PROMPT,
-            generation_config  = genai.GenerationConfig(
+        import os
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        response = client.models.generate_content(
+            model    = "gemini-2.0-flash",
+            contents = prompt,
+            config   = types.GenerateContentConfig(
+                system_instruction = CHART_ANALYSIS_SYSTEM_PROMPT,
                 temperature        = 0.1,
                 max_output_tokens  = 300,
-                response_mime_type = "application/json",
             ),
         )
-        resp = model.generate_content(prompt, request_options={"timeout": 15})
-        return resp.text, "gemini/gemini-2.0-flash"
+        return response.text, "gemini/gemini-2.0-flash"
 
     def _try_ollama(self, prompt: str) -> tuple[str, str]:
         import urllib.request

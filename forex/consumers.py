@@ -163,7 +163,9 @@ class DashboardConsumer(AsyncWebsocketConsumer):
         """Get the 50 most recent TradeLog entries from the database."""
         try:
             from forex.models import TradeLog
-            logs = TradeLog.objects.order_by("-received_at")[:50]
+            logs = TradeLog.objects.exclude(
+                status__in=["ERROR"]
+            ).order_by("-received_at")[:50]
             return [
                 {
                     "id":            t.pk,

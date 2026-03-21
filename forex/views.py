@@ -137,7 +137,11 @@ class SignalWebhookView(View):
 
         # ── Dispatch async Celery task ─────────────────────────────────────────
         try:
-            process_trade_signal.delay(log.pk)
+            process_trade_signal.apply_async(
+                args=[log.pk],
+                queue="trades",
+                expires=60,    # discard if not picked up within 60 seconds
+            )
         except Exception as exc:
             # If Celery/Redis is down, mark the row as error rather than leaving
             # it in PENDING state forever.

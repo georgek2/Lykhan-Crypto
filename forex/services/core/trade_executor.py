@@ -207,7 +207,7 @@ class TradeExecutor:
             raise TradeValidationError(
                 f"Lot size {lot_size} is below the minimum allowed (0.01)."
             )
-        if lot_size > 100.0:
+        if lot_size > 5000.0:
             raise TradeValidationError(
                 f"Lot size {lot_size} exceeds the maximum allowed (100.0)."
             )
