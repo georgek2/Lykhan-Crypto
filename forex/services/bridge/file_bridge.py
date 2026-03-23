@@ -192,6 +192,8 @@ class FileBridge:
             if res_file.exists():
                 try:
                     raw = res_file.read_text(encoding="utf-8")
+                    import logging
+                    logging.getLogger(__name__).info("BRIDGE RAW RESULT: %s", raw)
                     return TradeResult.model_validate_json(raw)
                 except Exception as exc:
                     raise BridgeError(

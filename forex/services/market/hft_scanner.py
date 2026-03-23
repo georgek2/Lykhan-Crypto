@@ -167,8 +167,8 @@ class HFTScanner:
         # Cap at symbol-aware limits for M1 scalping
         # Crypto pairs (BTC, ETH) use dollar-based stops, not pip-based
         if any(crypto in self.symbol for crypto in ("BTC", "ETH", "XRP", "LTC", "BCH")):
-            sl_pips = 200
-            tp_pips = 400
+            sl_pips = 0   # disable stops for crypto — EA stop calculation doesn't work for BTC
+            tp_pips = 0   # MT5 will hold position until manually closed or early exit triggers
         else:
             # Forex pairs — standard pip limits
             sl_pips = max(10, min(sl_pips, 50))
@@ -239,13 +239,13 @@ class HFTScanner:
             return None
 
         # ── Mode 1: Extreme RSI reversal (highest priority) ───────────────────
-        if rsi_val <= 25:
+        if rsi_val <= 40:
             logger.info(
                 "HFTScanner: EXTREME OVERSOLD rsi=%.2f — reversal BUY signal", rsi_val
             )
             return "BUY"
 
-        if rsi_val >= 75:
+        if rsi_val >= 60:
             logger.info(
                 "HFTScanner: EXTREME OVERBOUGHT rsi=%.2f — reversal SELL signal", rsi_val
             )

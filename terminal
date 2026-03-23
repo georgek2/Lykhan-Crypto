@@ -1,0 +1,8 @@
+Webserver + Websocket
+daphne -p 8000 project.asgi:application
+
+Celery Beat: 30m scan
+celery -A project beat --loglevel=info
+
+Celery Worker: 30s scan + Trade Executor
+celery -A project worker --loglevel=info --concurrency=1 -Q trades,celery
