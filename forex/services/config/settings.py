@@ -75,6 +75,19 @@ class ForexSettings(BaseSettings):
             default="redis://localhost:6379/0",
             description="Redis URL used by SessionBiasCache",
         )
+    # ── Monitoring / HFT tuning ─────────────────────────────────────────
+    monitor_poll_interval_seconds: int = Field(
+        default=1,
+        description="Seconds between account snapshot polls in AccountMonitor",
+    )
+    dashboard_tick_interval: int = Field(
+        default=1,
+        description="Seconds between dashboard WebSocket account ticks",
+    )
+    position_watcher_interval_seconds: int = Field(
+        default=5,
+        description="Recommended interval (seconds) for the lightweight position watcher task",
+    )
 
 # Module-level singleton — import this object everywhere in the forex
 # service layer instead of instantiating ForexSettings repeatedly.

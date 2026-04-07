@@ -135,6 +135,11 @@ CELERY_BEAT_SCHEDULE = {
         "task":     "forex.check_bridge_health",
         "schedule": 300,
     },
+    "position-watcher": {
+        "task":     "forex.run_position_watcher",
+        "schedule": 5,
+        "args":     ("EURUSD",),
+    },
 }
 
 # ── Logging ───────────────────────────────────────────────────────

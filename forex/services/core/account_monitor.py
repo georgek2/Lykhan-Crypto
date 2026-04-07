@@ -53,12 +53,14 @@ class AccountMonitor:
     def __init__(
         self,
         executor: Optional[TradeExecutor] = None,
-        poll_interval_seconds: int = 10,
+        poll_interval_seconds: int | None = None,
         on_update: Optional[Callable[[AccountSnapshot], None]] = None,
     ) -> None:
         # Accept an injected executor for testability, or create a real one
         self._executor  = executor or TradeExecutor()
-        self._interval  = poll_interval_seconds
+        from forex.services.config.settings import forex_settings
+        # Use passed interval if provided, otherwise fall back to configured default
+        self._interval  = poll_interval_seconds if poll_interval_seconds is not None else forex_settings.monitor_poll_interval_seconds
         self._on_update = on_update
 
         self._latest_snapshot: Optional[AccountSnapshot] = None

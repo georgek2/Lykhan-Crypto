@@ -433,3 +433,37 @@ def _broadcast_trade_event(outcome: dict) -> None:
         })
     except Exception as exc:
         logger.debug("_broadcast_trade_event: channel layer not available — %s", exc)
+
+
+@shared_task(name="forex.run_position_watcher")
+def run_position_watcher(symbol: str = "EURUSD") -> dict:
+    """
+    Lightweight position watcher that can be scheduled more frequently than
+    the HFT scanner. It fetches the current account snapshot and asks the
+    HFTScanner to re-evaluate early-exit opportunities using short-window
+    microtrend checks. This task is intentionally small and safe to run
+    often (e.g., every 5 seconds) if your Celery scheduler allows it.
+    """
+    try:
+        from forex.services.market.hft_scanner import HFTScanner, SCALP_COMMENT
+        from forex.services.notifications.telegram import TelegramNotifier
+
+        scanner = HFTScanner(symbol=symbol)
+        # Fetch current snapshot and only check positions the scanner cares about
+        try:
+            snapshot = scanner._exec.get_account_snapshot()
+        except Exception as exc:
+            logger.debug("run_position_watcher: snapshot failed — %s", exc)
+            return {"outcome": "snapshot_failed", "error": str(exc)}
+
+        scalp_positions = [p for p in snapshot.positions if hasattr(p, 'comment') and p.comment.startswith(SCALP_COMMENT)]
+        if not scalp_positions:
+            return {"outcome": "no_positions"}
+
+        exits = scanner._check_early_exits(scalp_positions)
+        if exits:
+            _broadcast_trade_event({"outcome": "early_exits", "exits": exits})
+        return {"outcome": "checked", "exits": exits}
+    except Exception as exc:
+        logger.exception("run_position_watcher: unexpected error")
+        return {"outcome": "error", "error": str(exc)}

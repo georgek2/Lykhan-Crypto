@@ -30,8 +30,10 @@ from channels.db import database_sync_to_async
 
 logger = logging.getLogger(__name__)
 
+from forex.services.config.settings import forex_settings
+
 DASHBOARD_GROUP = "lykhan_dashboard"
-ACCOUNT_TICK_INTERVAL = 10   # seconds between MT5 account snapshots
+ACCOUNT_TICK_INTERVAL = int(forex_settings.dashboard_tick_interval)
 
 
 class DashboardConsumer(AsyncWebsocketConsumer):

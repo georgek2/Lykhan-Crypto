@@ -238,20 +238,9 @@ class HFTScanner:
         if any(v is None for v in [ema9, ema21, rsi_val]):
             return None
 
-        # ── Mode 1: Extreme RSI reversal (highest priority) ───────────────────
-        if rsi_val <= 40:
-            logger.info(
-                "HFTScanner: EXTREME OVERSOLD rsi=%.2f — reversal BUY signal", rsi_val
-            )
-            return "BUY"
+    
 
-        if rsi_val >= 60:
-            logger.info(
-                "HFTScanner: EXTREME OVERBOUGHT rsi=%.2f — reversal SELL signal", rsi_val
-            )
-            return "SELL"
-
-        # ── Mode 2: Trend follow — requires bias alignment ────────────────────
+        # ── Mode 1: Trend follow — requires bias alignment ────────────────────
         if bias == SessionBias.LONG:
             ema_aligned = ema9 > ema21 or ema_cross == "golden"
             rsi_ok      = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
@@ -276,18 +265,78 @@ class HFTScanner:
         """
         exits = []
         for pos in positions:
-            # Only close profitable positions early
+            # Only consider profitable positions
             if pos.profit <= 0:
                 continue
+
+            # Prefer TP-based early exits: compute how far price has moved
+            # towards the TP from the open price. Only close if the current
+            # move has reached the configured EARLY_EXIT_PCT of that distance.
             try:
+                if getattr(pos, 'tp', None) and getattr(pos, 'open_price', None):
+                    # Compute directional progress towards TP
+                    if pos.action == "BUY":
+                        total_move = pos.tp - pos.open_price
+                        current_move = pos.current_price - pos.open_price
+                    else:
+                        total_move = pos.open_price - pos.tp
+                        current_move = pos.open_price - pos.current_price
+
+                    # If TP wasn't set (or zero) skip early-exit decision
+                    if not total_move:
+                        continue
+
+                    pct_to_tp = current_move / total_move
+                    if pct_to_tp < EARLY_EXIT_PCT:
+                        # Not yet reached our early-exit fraction of TP — skip
+                        continue
+                else:
+                    # No TP/price context — skip automated early exit to avoid
+                    # closing profitable positions prematurely.
+                    continue
+
+                # Before closing, perform a short-window microtrend check
+                try:
+                    micro = self._fetcher.fetch_candles(self.symbol, "M1", count=12)
+                except Exception:
+                    micro = None
+
+                hold_due_to_momentum = False
+                if micro is not None and micro.bars:
+                    ind = compute_indicators(micro)
+                    # If the short EMA9 is still moving in the trade direction
+                    # and MACD histogram confirms momentum, prefer to hold.
+                    ema9 = ind.get("ema9")
+                    ema21 = ind.get("ema21")
+                    macd_dir = ind.get("macd_direction")
+                    rsi_val = ind.get("rsi") or 0
+
+                    if pos.action == "BUY":
+                        if ema9 and ema21 and ema9 > ema21 and macd_dir and macd_dir.startswith("bullish"):
+                            hold_due_to_momentum = True
+                        # Also allow holding if RSI still below extreme overbought
+                        if rsi_val < RSI_OVERBOUGHT:
+                            hold_due_to_momentum = hold_due_to_momentum or False
+                    else:
+                        if ema9 and ema21 and ema9 < ema21 and macd_dir and macd_dir.startswith("bearish"):
+                            hold_due_to_momentum = True
+                        if rsi_val > RSI_OVERSOLD:
+                            hold_due_to_momentum = hold_due_to_momentum or False
+
+                # If momentum suggests continuation, only close when very near TP
+                if hold_due_to_momentum and pct_to_tp < 0.9:
+                    # Skip closing to let microtrend run — will be re-evaluated
+                    continue
+
                 result = self._exec.close_trade(pos.ticket)
                 logger.info(
-                    "HFTScanner: early exit ticket=%s profit=%.2f",
-                    pos.ticket, pos.profit,
+                    "HFTScanner: early exit ticket=%s profit=%.2f pct_to_tp=%.2f",
+                    pos.ticket, pos.profit, pct_to_tp,
                 )
                 exits.append({
                     "ticket": pos.ticket,
                     "profit": pos.profit,
+                    "pct_to_tp": round(pct_to_tp, 3),
                     "status": result.status,
                 })
             except Exception as exc:
