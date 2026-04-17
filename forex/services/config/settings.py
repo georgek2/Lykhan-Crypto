@@ -88,6 +88,41 @@ class ForexSettings(BaseSettings):
         default=5,
         description="Recommended interval (seconds) for the lightweight position watcher task",
     )
+    # Early-exit / microtrend tuning
+    early_exit_virtual_tp_atr_multiplier: float = Field(
+        default=2.0,
+        description="Multiplier applied to ATR to estimate a virtual TP for positions without explicit TP",
+    )
+    early_exit_min_profit_amount: float = Field(
+        default=0.5,
+        description="Minimum floating profit (account currency) before considering early exit for manual positions",
+    )
+    early_exit_momentum_hold_threshold: float = Field(
+        default=0.9,
+        description="If microtrend momentum is strong, require this fraction of TP before forcing close",
+    )
+    # Pullback / peak tracking
+    early_exit_pullback_pct: float = Field(
+        default=0.3,
+        description="Fractional drop from peak profit to trigger an early exit (e.g. 0.3 = 30%)",
+    )
+    early_exit_peak_ttl_seconds: int = Field(
+        default=600,
+        description="How long (seconds) to remember the peak P&L for a ticket in Redis",
+    )
+    early_exit_force_profit_amount: float = Field(
+        default=1.0,
+        description="Absolute profit (account currency) at or above which the watcher will force-close a position",
+    )
+    # Force-close retry tuning
+    force_close_max_retries: int = Field(
+        default=2,
+        description="Number of retries when a force-close is rejected before giving up",
+    )
+    force_close_slippage_increment: int = Field(
+        default=10,
+        description="Amount to add to slippage (in pips) on each retry attempt",
+    )
 
 # Module-level singleton — import this object everywhere in the forex
 # service layer instead of instantiating ForexSettings repeatedly.

@@ -37,6 +37,7 @@ from forex.services.core.schemas import SessionBias, TradeResult
 from forex.services.core.trade_executor import TradeExecutor, TradeValidationError
 from forex.services.market.bias_cache import SessionBiasCache
 from forex.services.market.ohlcv import OHLCVFetcher, compute_indicators
+from forex.services.config.settings import forex_settings
 
 logger = logging.getLogger(__name__)
 
@@ -273,27 +274,56 @@ class HFTScanner:
             # towards the TP from the open price. Only close if the current
             # move has reached the configured EARLY_EXIT_PCT of that distance.
             try:
-                if getattr(pos, 'tp', None) and getattr(pos, 'open_price', None):
-                    # Compute directional progress towards TP
-                    if pos.action == "BUY":
-                        total_move = pos.tp - pos.open_price
-                        current_move = pos.current_price - pos.open_price
-                    else:
-                        total_move = pos.open_price - pos.tp
-                        current_move = pos.open_price - pos.current_price
+                open_price = getattr(pos, 'open_price', None)
+                tp_price = getattr(pos, 'tp', None)
+                # If TP is missing or zero, estimate a virtual TP using recent ATR
+                if not tp_price and open_price is not None:
+                    try:
+                        micro_for_atr = self._fetcher.fetch_candles(self.symbol, "M1", count=20)
+                        ind_atr = None
+                        if micro_for_atr is not None:
+                            ind_atr = compute_indicators(micro_for_atr).get("atr")
+                        if ind_atr:
+                            tp_price = (
+                                open_price + ind_atr * forex_settings.early_exit_virtual_tp_atr_multiplier
+                                if pos.action == "BUY"
+                                else open_price - ind_atr * forex_settings.early_exit_virtual_tp_atr_multiplier
+                            )
+                        else:
+                            # Fallback: require a minimum profit amount before evaluating
+                            if pos.profit < forex_settings.early_exit_min_profit_amount:
+                                continue
+                            # Use a conservative virtual TP based on current profit
+                            if pos.action == "BUY":
+                                tp_price = open_price + (pos.profit * 0.0001)  # tiny fallback; unlikely
+                            else:
+                                tp_price = open_price - (pos.profit * 0.0001)
+                    except Exception:
+                        ind_atr = None
 
-                    # If TP wasn't set (or zero) skip early-exit decision
-                    if not total_move:
-                        continue
-
-                    pct_to_tp = current_move / total_move
-                    if pct_to_tp < EARLY_EXIT_PCT:
-                        # Not yet reached our early-exit fraction of TP — skip
-                        continue
-                else:
-                    # No TP/price context — skip automated early exit to avoid
-                    # closing profitable positions prematurely.
+                # If still no TP context, skip to avoid premature close
+                if not tp_price or open_price is None:
                     continue
+
+                # Compute directional progress towards TP
+                if pos.action == "BUY":
+                    total_move = tp_price - open_price
+                    current_move = pos.current_price - open_price
+                else:
+                    total_move = open_price - tp_price
+                    current_move = open_price - pos.current_price
+
+                # Protect against division by zero
+                if not total_move:
+                    continue
+
+                pct_to_tp = current_move / total_move
+
+                # If not yet reached our early-exit fraction, skip
+                if pct_to_tp < EARLY_EXIT_PCT:
+                    # allow absolute profit exits for manual positions if profit large
+                    if pos.profit < forex_settings.early_exit_min_profit_amount:
+                        continue
 
                 # Before closing, perform a short-window microtrend check
                 try:
@@ -324,7 +354,7 @@ class HFTScanner:
                             hold_due_to_momentum = hold_due_to_momentum or False
 
                 # If momentum suggests continuation, only close when very near TP
-                if hold_due_to_momentum and pct_to_tp < 0.9:
+                if hold_due_to_momentum and pct_to_tp < forex_settings.early_exit_momentum_hold_threshold:
                     # Skip closing to let microtrend run — will be re-evaluated
                     continue
 

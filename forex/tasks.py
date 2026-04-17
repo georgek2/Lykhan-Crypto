@@ -445,25 +445,178 @@ def run_position_watcher(symbol: str = "EURUSD") -> dict:
     often (e.g., every 5 seconds) if your Celery scheduler allows it.
     """
     try:
+        import redis as redis_lib
         from forex.services.market.hft_scanner import HFTScanner, SCALP_COMMENT
         from forex.services.notifications.telegram import TelegramNotifier
+        from forex.services.config.settings import forex_settings
 
-        scanner = HFTScanner(symbol=symbol)
-        # Fetch current snapshot and only check positions the scanner cares about
+        # Redis client for storing per-ticket peak PnL
+        url = getattr(forex_settings, 'redis_url', 'redis://localhost:6379/0')
+        r = redis_lib.from_url(url, decode_responses=True)
+
+        # Use a fresh executor to fetch the full account snapshot so we
+        # consider all open positions regardless of symbol or comment.
+        from forex.services.core.trade_executor import TradeExecutor
+        exec = TradeExecutor()
         try:
-            snapshot = scanner._exec.get_account_snapshot()
+            snapshot = exec.get_account_snapshot()
         except Exception as exc:
             logger.debug("run_position_watcher: snapshot failed — %s", exc)
             return {"outcome": "snapshot_failed", "error": str(exc)}
 
-        scalp_positions = [p for p in snapshot.positions if hasattr(p, 'comment') and p.comment.startswith(SCALP_COMMENT)]
-        if not scalp_positions:
+        # Consider all open positions
+        all_positions = list(snapshot.positions)
+        if not all_positions:
             return {"outcome": "no_positions"}
 
-        exits = scanner._check_early_exits(scalp_positions)
+        exits = []
+        dry_log = []
+
+        for pos in all_positions:
+            try:
+                ticket_key = f"lykhan:watcher:peak:{pos.ticket}"
+                # read previous peak
+                raw = r.get(ticket_key)
+                prev_peak = float(raw) if raw is not None else None
+
+                cur_profit = float(pos.profit)
+                # update peak if current profit is higher
+                if prev_peak is None or cur_profit > prev_peak:
+                    r.setex(ticket_key, forex_settings.early_exit_peak_ttl_seconds, str(cur_profit))
+                    prev_peak = cur_profit
+
+                # FORCE-CLOSE: if absolute profit meets configured threshold, close immediately
+                if cur_profit >= forex_settings.early_exit_force_profit_amount:
+                    # Attempt to close via executor; on REJECTED, apply robust handling
+                    try:
+                        result = exec.close_trade(pos.ticket)
+                    except Exception as exc:
+                        logger.warning('run_position_watcher: close_trade raised for %s — %s', pos.ticket, exc)
+                        dry_log.append({'ticket': pos.ticket, 'reason': 'close_exception', 'error': str(exc)})
+                        result = None
+
+                    # If result indicates success, record exit
+                    if result is not None and getattr(result, 'status', None) in ('EXECUTED', 'CLOSED'):
+                        exits.append({'ticket': pos.ticket, 'profit': cur_profit, 'status': result.status, 'reason': 'force_profit'})
+                        r.delete(ticket_key)
+                        continue
+
+                    # If rejected or error, inspect and try robust recovery
+                    err_msg = getattr(result, 'error_message', '') if result is not None else ''
+                    if result is not None and result.status == 'REJECTED' and 'Ticket not found' in (err_msg or ''):
+                        # Refresh snapshot to confirm whether ticket still exists
+                        try:
+                            fresh = exec.get_account_snapshot()
+                            exists = any(p.ticket == pos.ticket for p in getattr(fresh, 'positions', []))
+                        except Exception:
+                            exists = True
+
+                        if not exists:
+                            # Already closed externally — clear peak tracking
+                            r.delete(ticket_key)
+                            dry_log.append({'ticket': pos.ticket, 'reason': 'already_closed'})
+                            continue
+                        # If still exists, fall through to retry attempts below
+
+                    # Retry with explicit TradeCommand including symbol and progressively larger slippage
+                    from forex.services.core.schemas import TradeCommand, TradeAction
+                    base_slippage = getattr(exec, '_slippage', forex_settings.default_slippage)
+                    retries = 0
+                    closed = False
+                    while retries < forex_settings.force_close_max_retries and not closed:
+                        retries += 1
+                        try_slip = base_slippage + retries * forex_settings.force_close_slippage_increment
+                        cmd = TradeCommand(
+                            action = TradeAction.CLOSE,
+                            ticket = pos.ticket,
+                            symbol = pos.symbol,
+                            lot_size = getattr(pos, 'lot_size', exec._lot),
+                            slippage = try_slip,
+                            magic = getattr(pos, 'magic', exec._magic),
+                        )
+                        try:
+                            res = exec._execute(cmd)
+                        except Exception as exc:
+                            logger.warning('run_position_watcher: retry close exec._execute failed for %s — %s', pos.ticket, exc)
+                            dry_log.append({'ticket': pos.ticket, 'reason': 'retry_exception', 'error': str(exc)})
+                            res = None
+
+                        if res is not None and getattr(res, 'status', None) in ('EXECUTED', 'CLOSED'):
+                            exits.append({'ticket': pos.ticket, 'profit': cur_profit, 'status': res.status, 'reason': 'force_profit_retry', 'attempts': retries})
+                            r.delete(ticket_key)
+                            closed = True
+                            break
+                        else:
+                            # If rejected for ticket not found after retry, refresh and bail
+                            if res is not None and getattr(res, 'status', None) == 'REJECTED' and res.error_message and 'Ticket not found' in res.error_message:
+                                try:
+                                    fresh = exec.get_account_snapshot()
+                                    exists = any(p.ticket == pos.ticket for p in getattr(fresh, 'positions', []))
+                                except Exception:
+                                    exists = True
+                                if not exists:
+                                    r.delete(ticket_key)
+                                    dry_log.append({'ticket': pos.ticket, 'reason': 'already_closed_after_retry'})
+                                    closed = True
+                                    break
+                            # otherwise wait a short moment before next retry
+                            import time as _time
+                            _time.sleep(0.2)
+
+                    if not closed:
+                        dry_log.append({'ticket': pos.ticket, 'reason': 'force_close_failed_final', 'attempts': retries})
+
+                # compute pullback from peak
+                trigger_pullback = False
+                if prev_peak and prev_peak > 0:
+                    drop = (prev_peak - cur_profit) / prev_peak
+                    if drop >= forex_settings.early_exit_pullback_pct and cur_profit >= forex_settings.early_exit_min_profit_amount:
+                        trigger_pullback = True
+
+                # call scanner logic to decide early exit (this may close)
+                # use a dry_run flag to capture decision without closing when needed
+                # For now, perform real action if pullback triggered; otherwise use scanner's existing rules
+                if trigger_pullback:
+                    # re-evaluate short-window microtrend for the position's symbol
+                    fetcher = scanner._fetcher
+                    micro = None
+                    try:
+                        micro = fetcher.fetch_candles(pos.symbol, "M1", count=12)
+                    except Exception:
+                        micro = None
+                    ind = compute_indicators(micro) if micro else {}
+                    ema9 = ind.get('ema9'); ema21 = ind.get('ema21'); macd_dir = ind.get('macd_direction')
+                    hold_due_to_momentum = False
+                    if pos.action == 'BUY' and ema9 and ema21 and ema9 > ema21 and macd_dir and macd_dir.startswith('bullish'):
+                        hold_due_to_momentum = True
+                    if pos.action == 'SELL' and ema9 and ema21 and ema9 < ema21 and macd_dir and macd_dir.startswith('bearish'):
+                        hold_due_to_momentum = True
+
+                    if hold_due_to_momentum:
+                        dry_log.append({'ticket': pos.ticket, 'reason': 'momentum_hold', 'peak': prev_peak, 'profit': cur_profit})
+                    else:
+                        # close
+                        try:
+                            result = scanner._exec.close_trade(pos.ticket)
+                            exits.append({'ticket': pos.ticket, 'profit': cur_profit, 'status': result.status})
+                            r.delete(ticket_key)
+                        except Exception as exc:
+                            logger.warning('run_position_watcher: failed to close %s — %s', pos.ticket, exc)
+                            dry_log.append({'ticket': pos.ticket, 'reason': 'close_failed', 'error': str(exc)})
+                else:
+                    # No pullback; optionally run scanner's _check_early_exits to catch other rules
+                    # We'll call it in a dry manner by invoking internal method but not closing here.
+                    dry_log.append({'ticket': pos.ticket, 'reason': 'no_pullback', 'peak': prev_peak, 'profit': cur_profit})
+
+            except Exception as exc:
+                logger.exception('run_position_watcher: per-position error')
+                dry_log.append({'ticket': getattr(pos, 'ticket', None), 'error': str(exc)})
+
         if exits:
-            _broadcast_trade_event({"outcome": "early_exits", "exits": exits})
-        return {"outcome": "checked", "exits": exits}
+            _broadcast_trade_event({'outcome': 'early_exits', 'exits': exits})
+
+        return {'outcome': 'checked', 'exits': exits, 'dry_log': dry_log}
+
     except Exception as exc:
         logger.exception("run_position_watcher: unexpected error")
         return {"outcome": "error", "error": str(exc)}
