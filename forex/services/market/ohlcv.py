@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 forex/services/market/ohlcv.py
 ───────────────────────────────
@@ -15,7 +17,6 @@ Pure indicator calculations (EMA, RSI, MACD, ATR) are implemented here
 in pure Python with no external dependencies — no TA-Lib, no pandas.
 These run on the raw price arrays returned from CandleData.
 """
-from __future__ import annotations
 
 import logging
 from typing import Optional
@@ -115,6 +116,14 @@ class OHLCVFetcher:
 # ── Pure Python indicator calculations ───────────────────────────────────────
 # These take plain Python lists of floats (close prices, highs, lows).
 # No external dependencies — works on any environment including AWS Lambda.
+
+def last(series):
+    vals = [v for v in series if v is not None]
+    return round(vals[-1], 5) if vals else None
+
+def last2(series):
+    vals = [v for v in series if v is not None]
+    return round(vals[-2], 5) if len(vals) >= 2 else None
 
 def ema(prices: list[float], period: int) -> list[float]:
     """
@@ -230,6 +239,75 @@ def atr(
     return result
 
 
+def stochastic_kd(prices: list[float], highs: list[float], lows: list[float], k_period: int = 5, d_period: int = 3, smooth_k: int = 3) -> dict:
+    """
+    Stochastic Oscillator (%K, %D).
+    Returns dict with 'k' and 'd' lists.
+    """
+    if len(prices) < k_period:
+        return {"k": [None]*len(prices), "d": [None]*len(prices)}
+    k_values = []
+    for i in range(len(prices)):
+        if i < k_period - 1:
+            k_values.append(None)
+        else:
+            low_min = min(lows[i-k_period+1:i+1])
+            high_max = max(highs[i-k_period+1:i+1])
+            if high_max - low_min == 0:
+                k_values.append(0)
+            else:
+                k_values.append(100 * (prices[i] - low_min) / (high_max - low_min))
+    # Smooth %K
+    k_smooth = ema([v for v in k_values if v is not None], smooth_k)
+    k_smooth = [None]*(len(k_values)-len(k_smooth)) + k_smooth
+    # %D is SMA of %K
+    d_values = []
+    for i in range(len(k_smooth)):
+        if i < d_period-1 or k_smooth[i] is None:
+            d_values.append(None)
+        else:
+            window = [k for k in k_smooth[i-d_period+1:i+1] if k is not None]
+            d_values.append(sum(window)/len(window) if window else None)
+    return {"k": k_smooth, "d": d_values}
+
+def bollinger_bands(prices: list[float], period: int = 20, num_std: float = 2.0) -> dict:
+    """
+    Bollinger Bands and width.
+    Returns dict with 'upper', 'lower', 'middle', 'width' lists.
+    """
+    if len(prices) < period:
+        n = len(prices)
+        return {"upper": [None]*n, "lower": [None]*n, "middle": [None]*n, "width": [None]*n}
+    middle = []
+    upper = []
+    lower = []
+    width = []
+    for i in range(len(prices)):
+        if i < period-1:
+            middle.append(None)
+            upper.append(None)
+            lower.append(None)
+            width.append(None)
+        else:
+            window = prices[i-period+1:i+1]
+            m = sum(window)/period
+            std = (sum((x-m)**2 for x in window)/period)**0.5
+            middle.append(m)
+            upper.append(m + num_std*std)
+            lower.append(m - num_std*std)
+            width.append((upper[-1] - lower[-1])/m if m != 0 else None)
+    return {"upper": upper, "lower": lower, "middle": middle, "width": width}
+
+def volume_proxy(data: CandleData, period: int = 5) -> float:
+    """
+    Simple volume proxy: average candle body size over period.
+    """
+    if len(data.bars) < period:
+        return 0.0
+    bodies = [abs(bar.close - bar.open) for bar in data.bars[-period:]]
+    return sum(bodies)/len(bodies) if bodies else 0.0
+
+
 def compute_indicators(data: CandleData) -> dict:
     """
     Compute the full indicator set for a CandleData object.
@@ -245,14 +323,9 @@ def compute_indicators(data: CandleData) -> dict:
     rsi_series   = rsi(closes, 14)
     macd_data    = macd(closes)
     atr_series   = atr(highs, lows, closes, 14)
-
-    def last(series):
-        vals = [v for v in series if v is not None]
-        return round(vals[-1], 5) if vals else None
-
-    def last2(series):
-        vals = [v for v in series if v is not None]
-        return round(vals[-2], 5) if len(vals) >= 2 else None
+    stoch_data   = stochastic_kd(closes, highs, lows, 5, 3, 3)
+    bb_data      = bollinger_bands(closes, 20, 2.0)
+    vol_proxy    = volume_proxy(data, 5)
 
     ema9_now  = last(ema9_series)
     ema21_now = last(ema21_series)
@@ -281,6 +354,12 @@ def compute_indicators(data: CandleData) -> dict:
             macd_direction = "bearish_weakening"
 
     atr_now = last(atr_series)
+    stoch_k = last(stoch_data["k"])
+    stoch_d = last(stoch_data["d"])
+    bb_upper = last(bb_data["upper"])
+    bb_lower = last(bb_data["lower"])
+    bb_middle = last(bb_data["middle"])
+    bb_width = last(bb_data["width"])
 
     # Recommended ATR-based SL/TP
     atr_sl_pips = round(atr_now * 1.5 * 10000) if atr_now else None
@@ -301,4 +380,12 @@ def compute_indicators(data: CandleData) -> dict:
         "atr":           atr_now,
         "atr_sl_pips":   atr_sl_pips,
         "atr_tp_pips":   atr_tp_pips,
+        "stoch_k":       stoch_k,
+        "stoch_d":       stoch_d,
+        "bb_upper":      bb_upper,
+        "bb_lower":      bb_lower,
+        "bb_middle":     bb_middle,
+        "bb_width":      bb_width,
+        "volume_proxy":  vol_proxy,
     }
+

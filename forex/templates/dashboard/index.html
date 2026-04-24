@@ -30,6 +30,7 @@
   .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
   .status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
   #conn-status { color: var(--muted); font-size: 12px; }
+  .pair-selector { background: var(--border); border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 4px; font-size: 12px; }
 
   .grid {
     display: grid;
@@ -47,16 +48,23 @@
   .neg { color: var(--red); }
   .neu { color: var(--muted); }
 
-  .panels {
+  .main-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px; background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .bias-micro-container {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
-    gap: 1px; background: var(--border);
-    min-height: calc(100vh - 120px);
+    gap: 1px;
   }
   .panel {
     background: var(--surface);
     display: flex; flex-direction: column;
+  }
+  .panel.full-width {
+    grid-column: 1 / -1;
   }
   .panel-header {
     padding: 10px 16px; border-bottom: 1px solid var(--border);
@@ -82,39 +90,52 @@
   .tag-hft     { background: rgba(167,139,250,0.15); color: var(--purple); }
   .tag-signal  { background: rgba(20,184,166,0.15);  color: var(--teal); }
 
-  .bias-card {
+  .bias-card, .microtrend-card {
     padding: 16px; border-radius: 6px; border: 1px solid var(--border);
     margin-bottom: 12px;
   }
-  .bias-long    { border-color: rgba(34,197,94,0.3);  background: rgba(34,197,94,0.05); }
-  .bias-short   { border-color: rgba(239,68,68,0.3);  background: rgba(239,68,68,0.05); }
-  .bias-neutral { border-color: var(--border); }
-  .bias-label   { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
-  .bias-reason  { color: var(--muted); font-size: 12px; line-height: 1.5; }
-  .bias-meta    { margin-top: 8px; color: var(--muted); font-size: 11px; }
-  .conf-bar     { height: 4px; border-radius: 2px; background: var(--border); margin-top: 8px; }
-  .conf-fill    { height: 100%; border-radius: 2px; background: var(--teal); transition: width 0.4s; }
+  .bias-long, .micro-long { border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.05); }
+  .bias-short, .micro-short { border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.05); }
+  .bias-neutral, .micro-neutral { border-color: var(--border); }
+  .bias-label, .microtrend-label { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+  .bias-reason { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .bias-meta, .microtrend-meta { margin-top: 8px; color: var(--muted); font-size: 11px; }
+  .conf-bar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 8px; }
+  .conf-fill { height: 100%; border-radius: 2px; background: var(--teal); transition: width 0.4s; }
+  .microtrend-indicators { font-size: 11px; color: var(--muted); margin-top: 8px; }
 
   .feed-item {
     padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 12px;
   }
   .feed-item:last-child { border-bottom: none; }
-  .feed-time   { color: var(--muted); font-size: 10px; }
+  .feed-time { color: var(--muted); font-size: 10px; }
   .feed-signal { color: var(--amber); }
-  .feed-trade  { color: var(--teal); }
-  .feed-llm    { color: var(--purple); }
+  .feed-trade { color: var(--teal); }
+  .feed-llm { color: var(--purple); }
 
   #no-positions { color: var(--muted); padding: 16px 0; text-align: center; }
 
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
   .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+
+  @media (max-width: 1200px) {
+    .main-panels { grid-template-columns: 1fr 1fr; }
+  }
 </style>
 </head>
 <body>
 
 <header>
   <div class="logo">LYKHAN</div>
-  <div id="conn-status"><span class="status-dot" id="dot"></span>Connecting…</div>
+  <div>
+    <select id="pair-selector" class="pair-selector">
+      <option value="EURUSD">EURUSD</option>
+      <option value="GBPUSD">GBPUSD</option>
+      <option value="USDJPY">USDJPY</option>
+      <option value="BTCUSD">BTCUSD</option>
+    </select>
+    <div id="conn-status"><span class="status-dot" id="dot"></span>Connecting…</div>
+  </div>
 </header>
 
 <div class="grid">
@@ -140,8 +161,7 @@
   </div>
 </div>
 
-<div class="panels">
-
+<div class="main-panels">
   <div class="panel">
     <div class="panel-header">
       <span class="panel-title">Open positions</span>
@@ -159,50 +179,74 @@
     </div>
   </div>
 
-  <div class="panel">
-    <div class="panel-header">
-      <span class="panel-title">Session bias</span>
-      <span class="panel-badge" id="bias-model">—</span>
+  <div class="bias-micro-container">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title" id="bias-pair-title">Session bias (EURUSD)</span>
+        <span class="panel-badge" id="bias-model">—</span>
+      </div>
+      <div class="panel-body">
+        <div class="bias-card bias-neutral" id="bias-card">
+          <div class="bias-label" id="bias-label">⚪ NEUTRAL</div>
+          <div class="bias-reason" id="bias-reason">Waiting for analysis…</div>
+          <div class="bias-meta" id="bias-meta"></div>
+          <div class="conf-bar"><div class="conf-fill" id="conf-fill" style="width:0%"></div></div>
+        </div>
+      </div>
     </div>
-    <div class="panel-body">
-      <div class="bias-card bias-neutral" id="bias-card">
-        <div class="bias-label" id="bias-label">⚪ NEUTRAL</div>
-        <div class="bias-reason" id="bias-reason">Waiting for first LLM analysis…</div>
-        <div class="bias-meta" id="bias-meta"></div>
-        <div class="conf-bar"><div class="conf-fill" id="conf-fill" style="width:0%"></div></div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title" id="micro-pair-title">Microtrend M1 (EURUSD)</span>
+        <span class="panel-badge" id="microtrend-bias">—</span>
+      </div>
+      <div class="panel-body" id="microtrend-panel">
+        <div class="microtrend-card bias-neutral" id="microtrend-card">
+          <div class="microtrend-label" id="microtrend-label">⚪ NEUTRAL</div>
+          <div class="microtrend-meta" id="microtrend-meta">Score: — | Velocity: —</div>
+          <div class="microtrend-indicators" id="microtrend-indicators">RSI: —, Stoch: —/—, BB: —, Vol: —</div>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="panel">
     <div class="panel-header">
-      <span class="panel-title">Trade log</span>
+      <span class="panel-title">Recent trades</span>
       <span class="panel-badge" id="trade-count">0</span>
     </div>
     <div class="panel-body" style="padding:0">
       <table>
         <thead><tr>
-          <th style="padding-left:16px">Time</th><th>Symbol</th>
-          <th>Action</th><th>Status</th><th>Source</th><th>P&L</th>
+          <th style="padding-left:16px">Time</th><th>Symbol</th><th>Action</th><th>Status</th><th>P&L</th>
         </tr></thead>
         <tbody id="trade-body"></tbody>
       </table>
     </div>
   </div>
+</div>
 
-  <div class="panel">
-    <div class="panel-header">
-      <span class="panel-title">Activity feed</span>
-    </div>
-    <div class="panel-body" id="feed-body"></div>
+<div class="panel full-width">
+  <div class="panel-header">
+    <span class="panel-title">Live feed</span>
   </div>
-
+  <div class="panel-body" id="feed-body" style="max-height: 300px;"></div>
 </div>
 
 <script>
 const ws = new WebSocket(`ws://${location.host}/ws/dashboard/`);
 const dot = document.getElementById('dot');
 const connStatus = document.getElementById('conn-status');
+const pairSelector = document.getElementById('pair-selector');
+let currentPair = 'EURUSD';
+
+pairSelector.addEventListener('change', (e) => {
+  currentPair = e.target.value;
+  document.getElementById('bias-pair-title').textContent = `Session bias (${currentPair})`;
+  document.getElementById('micro-pair-title').textContent = `Microtrend M1 (${currentPair})`;
+  // Request fresh data for selected pair (future backend support)
+  console.log('Pair changed to:', currentPair);
+});
 
 ws.onopen = () => {
   dot.classList.add('live');
@@ -220,17 +264,59 @@ ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
   if (msg.event === 'initial_state') {
     if (msg.snapshot && !msg.snapshot.error) updateAccount(msg.snapshot);
-    if (msg.trades)  renderTrades(msg.trades);
-    if (msg.bias)    updateBias(msg.bias);
+    if (msg.trades) renderTrades(msg.trades);
+    if (msg.bias) updateBias(msg.bias);
+    if (msg.microtrend) updateMicrotrend(msg.microtrend);
   } else if (msg.event === 'account_tick') {
     updateAccount(msg.payload);
   } else if (msg.event === 'bias_update') {
-    updateBias(msg);
-    addFeed('llm', `Bias updated: ${msg.bias} (${msg.confidence}% confidence via ${msg.model_used})`);
+    if (msg.symbol === currentPair) {
+      updateBias(msg);
+    }
+    addFeed('llm', `Bias ${msg.symbol}: ${msg.bias} (${msg.confidence}%)`);
+  } else if (msg.event === 'microtrend_update') {
+    if (msg.symbol === currentPair) {
+      updateMicrotrend(msg.microtrend);
+    }
   } else if (msg.event === 'trade_event') {
-    addFeed('trade', `${msg.payload.signal || msg.payload.action} ${msg.payload.symbol || 'EURUSD'} — ${msg.payload.outcome}`);
+    addFeed('trade', `${msg.payload.symbol || 'EURUSD'}: ${msg.payload.outcome || msg.payload.action}`);
   }
 };
+
+function updateMicrotrend(data) {
+  const card   = document.getElementById('microtrend-card');
+  const label  = document.getElementById('microtrend-label');
+  const meta   = document.getElementById('microtrend-meta');
+  const ind    = document.getElementById('microtrend-indicators');
+  const badge  = document.getElementById('microtrend-bias');
+
+  const icons = { LONG:'📈', SHORT:'📉', NEUTRAL:'⚪' };
+  const bias  = data.micro_bias || 'NEUTRAL';
+  label.textContent  = `${icons[bias] || '⚪'} ${bias}`;
+  badge.textContent  = bias;
+  meta.textContent   = `Score: ${data.score ?? '—'} | Velocity: ${data.velocity_5 ?? '—'}`;
+  ind.textContent    = `RSI5: ${data.rsi5 ?? '—'}, Stoch: ${data.stoch_k ?? '—'}/${data.stoch_d ?? '—'}, BB: ${data.bb_width ?? '—'}, Vol: ${data.volume_proxy ?? '—'}`;
+  card.className = `microtrend-card micro-${bias.toLowerCase()}`;
+}
+
+function updateBias(data) {
+  const card   = document.getElementById('bias-card');
+  const label  = document.getElementById('bias-label');
+  const reason = document.getElementById('bias-reason');
+  const meta   = document.getElementById('bias-meta');
+  const fill   = document.getElementById('conf-fill');
+  const model  = document.getElementById('bias-model');
+
+  const icons = { LONG:'📈', SHORT:'📉', NEUTRAL:'⚪' };
+  const bias  = data.bias || 'NEUTRAL';
+  label.textContent  = `${icons[bias] || '⚪'} ${bias}`;
+  reason.textContent = data.reasoning || 'No reasoning available';
+  meta.textContent   = `${data.confidence || 0}% confidence`;
+  fill.style.width   = `${data.confidence || 0}%`;
+  model.textContent  = data.model_used || '—';
+
+  card.className = `bias-card bias-${bias.toLowerCase()}`;
+}
 
 function fmt(n, decimals=2) {
   if (n == null) return '—';
@@ -280,44 +366,23 @@ function renderPositions(positions) {
 
 function renderTrades(trades) {
   const tbody = document.getElementById('trade-body');
-  // Filter out ERROR trades from display
   const validTrades = trades.filter(t => t.status !== 'ERROR');
   document.getElementById('trade-count').textContent = validTrades.length;
   tbody.innerHTML = '';
   validTrades.slice(0, 40).forEach(t => {
     const tr = document.createElement('tr');
     const time = t.received_at ? new Date(t.received_at).toLocaleTimeString() : '—';
-    const srcTag = t.signal_source === 'llm' ? 'hft' : 'signal';
     const pnlClass = (t.profit||0) > 0 ? 'pos' : (t.profit||0) < 0 ? 'neg' : 'neu';
     const statusTag = {EXECUTED:'exec',REJECTED:'reject',PENDING:'pending',CLOSED:'exec'}[t.status]||'pending';
+    const actionTag = t.action.toLowerCase();
     tr.innerHTML = `
       <td style="padding-left:16px;color:var(--muted)">${time}</td>
       <td>${t.symbol}</td>
-      <td><span class="tag tag-${t.action.toLowerCase()}">${t.action}</span></td>
+      <td><span class="tag tag-${actionTag}">${t.action}</span></td>
       <td><span class="tag tag-${statusTag}">${t.status}</span></td>
-      <td><span class="tag tag-${srcTag}">${t.signal_source}</span></td>
       <td class="${pnlClass}">${t.profit != null ? fmt(t.profit) : '—'}</td>`;
     tbody.appendChild(tr);
   });
-}
-
-function updateBias(data) {
-  const card   = document.getElementById('bias-card');
-  const label  = document.getElementById('bias-label');
-  const reason = document.getElementById('bias-reason');
-  const meta   = document.getElementById('bias-meta');
-  const fill   = document.getElementById('conf-fill');
-  const model  = document.getElementById('bias-model');
-
-  const icons = { LONG:'📈', SHORT:'📉', NEUTRAL:'⚪' };
-  const bias  = data.bias || 'NEUTRAL';
-  label.textContent  = `${icons[bias]||'⚪'} ${bias}`;
-  reason.textContent = data.reasoning || '';
-  meta.textContent   = `${data.confidence||0}% confidence`;
-  fill.style.width   = `${data.confidence||0}%`;
-  model.textContent  = data.model_used || '—';
-
-  card.className = `bias-card bias-${bias.toLowerCase()}`;
 }
 
 function addFeed(type, text) {
@@ -327,9 +392,9 @@ function addFeed(type, text) {
   const time = new Date().toLocaleTimeString();
   div.innerHTML = `<div class="feed-time">${time}</div><div class="feed-${type}">${text}</div>`;
   feed.insertBefore(div, feed.firstChild);
-  // Keep feed to 50 items
   while (feed.children.length > 50) feed.removeChild(feed.lastChild);
 }
 </script>
 </body>
 </html>
+

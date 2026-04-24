@@ -107,19 +107,39 @@ CELERY_TASK_QUEUES = {
 CELERY_TASK_DEFAULT_QUEUE = "celery"
 
 CELERY_BEAT_SCHEDULE = {
-    "strategic-analysis": {
+"strategic-analysis-eurusd": {
         "task":     "forex.run_strategic_analysis",
-        "schedule": 1800,
+        "schedule": 600,
         "args":     ("EURUSD",),
     },
-    "hft-scan": {
+    "hft-scan-eurusd": {
         "task":     "forex.run_hft_scan",
         "schedule": 30,
         "args":     ("EURUSD",),
     },
+    "strategic-analysis-gbpusd": {
+        "task":     "forex.run_strategic_analysis",
+        "schedule": 600,
+        "args":     ("GBPUSD",),
+    },
+    "hft-scan-gbpusd": {
+        "task":     "forex.run_hft_scan",
+        "schedule": 30,
+        "args":     ("GBPUSD",),
+    },
+    "strategic-analysis-usdjpy": {
+        "task":     "forex.run_strategic_analysis",
+        "schedule": 600,
+        "args":     ("USDJPY",),
+    },
+    "hft-scan-usdjpy": {
+        "task":     "forex.run_hft_scan",
+        "schedule": 30,
+        "args":     ("USDJPY",),
+    },
     "strategic-analysis-btcusd": {   
         "task":     "forex.run_strategic_analysis",
-        "schedule": 1800,
+        "schedule": 600,
         "args":     ("BTCUSD",),
     },
     "hft-scan-btcusd": {             
@@ -127,6 +147,8 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 30,
         "args":     ("BTCUSD",),
     },
+
+
     "telegram-summary": {
         "task":     "forex.send_telegram_summary",
         "schedule": 1800,

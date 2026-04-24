@@ -20,6 +20,15 @@ from pydantic import Field
 
 
 class ForexSettings(BaseSettings):
+    # ── Microtrend Entry Thresholds ─────────────────────────────────────────
+    microtrend_score_threshold: float = Field(
+        default=0.5,
+        description="Minimum microtrend score required for entry (LONG/SHORT)",
+    )
+    microtrend_velocity_threshold: float = Field(
+        default=0.00005,
+        description="Minimum microtrend velocity required for entry (LONG/SHORT)",
+    )
     model_config = SettingsConfigDict(
         # Looks for .env in the current working directory, which when
         # running from the lykhan project root resolves correctly.

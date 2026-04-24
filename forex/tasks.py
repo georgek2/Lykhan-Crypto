@@ -292,8 +292,23 @@ def run_hft_scan(symbol: str = "EURUSD") -> dict:
     notifier = TelegramNotifier()
     outcome  = scanner.scan()
 
+    # Always broadcast latest microtrend to dashboard
+def _broadcast_microtrend(symbol: str, micro):
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        async_to_sync(layer.group_send)("lykhan_dashboard", {
+            "type": "microtrend_update",
+            "symbol": symbol,
+            "microtrend": micro,
+        })
+    except Exception as exc:
+        logger.debug("_broadcast_microtrend %s: channel layer not available — %s", symbol, exc)
+
+
+    # If executed, persist and broadcast as before
     if outcome.get("outcome") == "executed" and outcome.get("ticket") is not None:
-        # Persist to TradeLog
         try:
             log = TradeLog.objects.create(
                 command_id        = str(uuid.uuid4()),
@@ -325,6 +340,10 @@ def run_hft_scan(symbol: str = "EURUSD") -> dict:
         )
 
         _broadcast_trade_event(outcome)
+    # Always broadcast microtrend - now always present in outcome
+        if "micro" in outcome:
+            _broadcast_microtrend(symbol, outcome["micro"])
+
 
     return outcome
 

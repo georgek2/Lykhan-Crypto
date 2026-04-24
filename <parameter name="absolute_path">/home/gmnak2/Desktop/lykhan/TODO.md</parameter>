@@ -1,0 +1,41 @@
+<parameter name="content"># Lykhan Micro-Trend Scalping Improvements - TODO
+Status: [In Progress] | Approved by user
+
+## Plan Summary
+Enhance M1 HFT scanner for 5-10min micro-trend predictions/scalps:
+- New indicators: RSI(5), Stochastic(5,3,3), Price Velocity, BB Squeeze
+- Update scanner rules + tighter risk
+- Refine LLM prompt for next-5min focus + add M1 to strategic TF
+
+## Steps
+### 1. [TODO] Add new micro-indicators to ohlcv.py
+   - RSI(5)
+   - Stochastic Oscillator
+   - Price Velocity (5/10-bar delta)
+   - Bollinger Bands + squeeze detection
+   - Update compute_indicators() to include them
+
+### 2. [TODO] Create microtrend.py service for summaries (used by scanner/LLM)
+
+### 3. [TODO] Update hft_scanner.py
+   - Integrate new indicators into _evaluate_entry()
+   - Micro-rules: e.g., velocity down + Stoch oversold + SHORT bias → SELL
+   - Tighter ATR (0.5 SL / 1 TP); poll 15s?
+   - Enhanced early exits
+
+### 4. [TODO] Update chart_analyzer.py
+   - Add M1 TF to fetch (20 bars)
+   - Revise prompt: emphasize "next 5-10min micro-trend"
+
+### 5. [TODO] Update tasks.py + Celery schedule
+   - Faster hft_scan (15s for EURUSD)
+   - New micro-scan task?
+
+### 6. [TODO] Test & Verify
+   - Run celery worker/beat
+   - python main.py monitor (check new inds)
+   - Simulate scalps
+
+### 7. [DONE] Initial TODO created ✓
+
+Next step: Complete Step 1</parameter>

@@ -87,20 +87,31 @@ class DashboardConsumer(AsyncWebsocketConsumer):
             "payload": event["payload"],
         }))
 
+    async def microtrend_update(self, event: dict) -> None:
+        """Receives microtrend.update from channel group, forwards to browser."""
+        await self.send(text_data=json.dumps({
+            "event": "microtrend_update",
+            "microtrend": event["microtrend"],
+        }))
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     async def _send_initial_state(self) -> None:
         """Send the full initial dashboard state on connect."""
         try:
             snapshot  = await self._get_snapshot()
-            trades    = await self._get_recent_trades()
-            bias_data = await self._get_bias()
+            trades     = await self._get_recent_trades()
+
+            bias_data  = await self._get_bias("EURUSD")
+            micro_data = await self._get_microtrend("EURUSD")
+
 
             await self.send(text_data=json.dumps({
-                "event":    "initial_state",
-                "snapshot": snapshot,
-                "trades":   trades,
-                "bias":     bias_data,
+                "event":      "initial_state",
+                "snapshot":   snapshot,
+                "trades":     trades,
+                "bias":       bias_data,
+                "microtrend": micro_data,
             }))
         except Exception as exc:
             logger.error("DashboardConsumer: initial state failed — %s", exc)
@@ -167,7 +178,7 @@ class DashboardConsumer(AsyncWebsocketConsumer):
             from forex.models import TradeLog
             logs = TradeLog.objects.exclude(
                 status__in=["ERROR"]
-            ).order_by("-received_at")[:50]
+            ).order_by("-received_at")[:20]
             return [
                 {
                     "id":            t.pk,
@@ -191,19 +202,38 @@ class DashboardConsumer(AsyncWebsocketConsumer):
             return []
 
     @database_sync_to_async
-    def _get_bias(self) -> dict:
-        """Get current session bias from Redis."""
+    def _get_bias(self, symbol: str = "EURUSD") -> dict:
+        """Get current session bias from Redis for specific symbol."""
         try:
             from forex.services.market.bias_cache import SessionBiasCache
-            record = SessionBiasCache().get("EURUSD")
+            record = SessionBiasCache().get(symbol.upper())
             if record is None:
-                return {"bias": "NEUTRAL", "confidence": 0, "reasoning": "No analysis yet"}
+                return {"bias": "NEUTRAL", "confidence": 0, "reasoning": "No analysis yet", "symbol": symbol}
             return {
                 "bias":       record.bias.value,
                 "confidence": record.confidence,
                 "reasoning":  record.reasoning,
                 "model_used": record.model_used,
+                "symbol":     record.symbol,
                 "set_at":     record.set_at.isoformat(),
             }
         except Exception as exc:
-            return {"bias": "NEUTRAL", "confidence": 0, "reasoning": str(exc)}
+            return {"bias": "NEUTRAL", "confidence": 0, "reasoning": str(exc), "symbol": symbol}
+
+
+    @database_sync_to_async
+    def _get_microtrend(self, symbol: str = "EURUSD") -> dict:
+        """Get latest microtrend from HFTScanner.scan() for specific symbol."""
+        try:
+            from forex.services.market.hft_scanner import HFTScanner
+            scanner = HFTScanner(symbol=symbol)
+            outcome = scanner.scan()
+            micro = outcome.get("micro", {})
+            if micro:
+                micro["symbol"] = symbol
+                return micro
+            return {"micro_bias": "NEUTRAL", "score": 0, "symbol": symbol}
+        except Exception as exc:
+            logger.warning("DashboardConsumer._get_microtrend(%s): %s", symbol, exc)
+            return {"micro_bias": "ERROR", "score": 0, "symbol": symbol}
+

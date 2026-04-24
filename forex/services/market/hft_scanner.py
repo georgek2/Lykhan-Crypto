@@ -37,6 +37,7 @@ from forex.services.core.schemas import SessionBias, TradeResult
 from forex.services.core.trade_executor import TradeExecutor, TradeValidationError
 from forex.services.market.bias_cache import SessionBiasCache
 from forex.services.market.ohlcv import OHLCVFetcher, compute_indicators
+from forex.services.market.microtrend import analyze_micro
 from forex.services.config.settings import forex_settings
 
 logger = logging.getLogger(__name__)
@@ -150,15 +151,17 @@ class HFTScanner:
             return {"outcome": "skipped", "reason": "insufficient_m1_data", "symbol": self.symbol}
 
         ind = compute_indicators(data)
+        micro = analyze_micro(data)
 
-        # ── 4. Entry signal logic ─────────────────────────────────────────────
-        signal = self._evaluate_entry(bias, ind)
+        # ── 4. Entry signal logic (micro-enhanced) ─────────────────────────────
+        signal = self._evaluate_entry(bias, ind, micro)
         if signal is None:
             return {
                 "outcome":    "skipped",
                 "reason":     "no_entry_signal",
                 "symbol":     self.symbol,
                 "indicators": ind,
+                "micro":      micro,
             }
 
        # ── 5. ATR-based position sizing ──────────────────────────────────────
@@ -197,6 +200,7 @@ class HFTScanner:
                 signal, self.symbol, result.ticket, result.open_price,
                 sl_pips, tp_pips,
             )
+            # Always return micro/indicators for dashboard
             return {
                 "outcome":    "executed",
                 "signal":     signal,
@@ -207,6 +211,7 @@ class HFTScanner:
                 "bias":       bias.value if hasattr(bias, 'value') else bias,
                 "confidence": record.confidence,
                 "indicators": ind,
+                "micro":      micro,
                 "symbol":     self.symbol,
             }
 
@@ -218,17 +223,13 @@ class HFTScanner:
         self,
         bias:       SessionBias,
         indicators: dict,
+        micro: dict,
     ) -> str | None:
         """
         Returns "BUY", "SELL", or None.
 
-        Two entry modes:
-        1. EXTREME RSI — immediate reversal entry regardless of bias
-        RSI < 25 → BUY (oversold bounce)
-        RSI > 75 → SELL (overbought reversal)
-
-        2. TREND FOLLOW — normal bias-aligned entry
-        Requires EMA alignment + RSI in range + MACD confirmation
+        Entry requires BOTH session bias and microtrend bias alignment,
+        and microtrend score/velocity above thresholds.
         """
         ema9      = indicators.get("ema9")
         ema21     = indicators.get("ema21")
@@ -236,20 +237,28 @@ class HFTScanner:
         macd_dir  = indicators.get("macd_direction", "neutral")
         ema_cross = indicators.get("ema_cross", "none")
 
-        if any(v is None for v in [ema9, ema21, rsi_val]):
+        # Microtrend fields
+        micro_bias = micro.get("micro_bias")
+        micro_score = micro.get("score", 0)
+        micro_vel = micro.get("velocity_5", 0)
+
+        # Configurable thresholds from settings
+        from forex.services.config.settings import forex_settings
+        MICRO_SCORE_THRESH = forex_settings.microtrend_score_threshold
+        MICRO_VEL_THRESH = forex_settings.microtrend_velocity_threshold
+
+        if any(v is None for v in [ema9, ema21, rsi_val, micro_bias]):
             return None
 
-    
-
-        # ── Mode 1: Trend follow — requires bias alignment ────────────────────
-        if bias == SessionBias.LONG:
+        # Only trade if microtrend bias matches session bias and is strong enough
+        if bias == SessionBias.LONG and micro_bias == "LONG" and micro_score > MICRO_SCORE_THRESH and micro_vel > MICRO_VEL_THRESH:
             ema_aligned = ema9 > ema21 or ema_cross == "golden"
             rsi_ok      = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
             macd_ok     = macd_dir in ("bullish_increasing", "bullish_weakening")
             if ema_aligned and rsi_ok and macd_ok:
                 return "BUY"
 
-        elif bias == SessionBias.SHORT:
+        elif bias == SessionBias.SHORT and micro_bias == "SHORT" and micro_score < -MICRO_SCORE_THRESH and micro_vel < -MICRO_VEL_THRESH:
             ema_aligned = ema9 < ema21 or ema_cross == "death"
             rsi_ok      = RSI_OVERSOLD < rsi_val < RSI_OVERBOUGHT
             macd_ok     = macd_dir in ("bearish_increasing", "bearish_weakening")
